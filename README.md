@@ -516,11 +516,9 @@ curl "http://127.0.0.1:8080/api/search?q=report&limit=20" \
 
 返回值除命中列表外，还带 `byKind` / `byExt` / `bySize` / `byDay` 四组聚合统计。
 
-### 关于"模型选择"
+### 客户端兼容性
 
-本项目是**文件存储服务，不涉及 AI 模型调用**，因此没有"模型通道""模型选择""API Key 管理""代理转发"这类概念。如果你在找的是 API 中转网关，本项目不提供该能力。
-
-客户端接入方面，HomeVault 提供的是标准 HTTP + JSON 接口和浏览器页面，**不提供 WebDAV / S3 / FTP 兼容协议**；第三方客户端需要按 HTTP 接口自行对接。
+HomeVault 提供标准 HTTP + JSON 接口和浏览器页面，**不提供 WebDAV / S3 / FTP 兼容协议**；第三方客户端需要按 HTTP 接口自行对接。
 
 > 完整的接口清单、请求体字段、错误码说明见 [`docs/API.md`](docs/API.md)。
 
