@@ -1,5 +1,5 @@
 # =============================================================================
-# litedrive 反向代理 —— Caddy
+# homevault 反向代理 —— Caddy
 #
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 #   sudo systemctl reload caddy
@@ -9,7 +9,7 @@
 #   2. reverse_proxy 默认就是**流式转发**，不会先把请求体缓冲到磁盘，
 #      所以不像 Nginx 那样必须显式关掉 request buffering。
 #
-# 改完记得在 litedrive 管理页面打开「信任反向代理」，
+# 改完记得在 homevault 管理页面打开「信任反向代理」，
 # 否则审计日志里记录的客户端 IP 会是 Caddy 的地址。
 # =============================================================================
 
@@ -27,7 +27,7 @@ drive.example.com {
 		}
 
 		# 透传真实客户端信息。
-		# litedrive 只有在运行期设置 trustProxy 打开后才会采信这两个头，
+		# homevault 只有在运行期设置 trustProxy 打开后才会采信这两个头，
 		# 没打开时用的是直连 IP（也就是 Caddy 的地址）。
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-For {remote_host}
@@ -42,13 +42,13 @@ drive.example.com {
 
 	# 访问日志（可选）。Caddy 默认已经写日志，这里只是显式声明并轮转。
 	log {
-		output file /var/log/caddy/litedrive-access.log {
+		output file /var/log/caddy/homevault-access.log {
 			roll_size 50MiB
 			roll_keep 5
 		}
 	}
 
-	# 安全响应头。litedrive 自身已经下发 CSP（default-src 'self'），
+	# 安全响应头。homevault 自身已经下发 CSP（default-src 'self'），
 	# 这里补充几个 Caddy 层面更适合设置的。
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

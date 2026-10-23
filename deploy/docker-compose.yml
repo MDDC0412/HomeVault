@@ -1,88 +1,109 @@
 # =============================================================================
 # homevault docker-compose
 #
-# 两个服务用 profiles 区分，同一个文件同时支持两种部署形态：
+# 用法（先看完这一页，再动手）：
 #
-#    cd deploy
-#    docker compose --profile lite up -d --build     # 精简版（25–40 MB），端口 8080
-#    docker compose --profile full up -d --build     # 完整版（700 MB–1 GB，带 Office 预览），端口 8081
+#   cd deploy
+#   docker compose --profile full up -d --build     # 完整版，带 Office 预览
+#   docker compose --profile lite up -d --build     # 精简版，体积小
 #
-#    docker compose --profile lite logs -f homevault-lite
-#    docker compose --profile lite down
+#   docker compose --profile full logs -f           # 看日志
+#   docker compose --profile full down              # 停止并删除容器（数据保留）
 #
-# 两个服务都绑定到 127.0.0.1，**建议前面再挂一层反向代理**（deploy/Caddyfile
-# 或 deploy/nginx.conf），不要把端口直接暴露到公网。
+# -----------------------------------------------------------------------------
+# 所有可自定义的值都走「环境变量」，不写死在这个文件里。
+# 把它们放进同目录的 .env 文件，docker compose 会自动读取：
 #
-# 数据落在 ./data/ 与 ./data-full/（相对本文件所在目录）。
+#   # deploy/.env
+#   APP_UID=18090
+#   APP_GID=18090
+#   HOST_BIND=0.0.0.0
+#   HOST_PORT=18090
+#   APT_MIRROR=mirrors.aliyun.com
+#   TZ=Asia/Shanghai
+#
+# 这样改配置不需要动 docker-compose.yml，git pull 时永远不会冲突。
+# 下面每个 ${VAR:-默认值} 的写法，都表示"没设就用默认值"。
+# -----------------------------------------------------------------------------
+# ⚠️ HOST_PORT 与 config.ini 的关系（最容易踩的坑）：
+#
+#    容器内**始终**监听 8080，不要去改 config.ini 的 listen。
+#    对外端口由 HOST_PORT 决定，写在 ports 左边，形如 HOST_PORT:8080。
+#
+#    正确：HOST_PORT=18090  →  访问 http://IP:18090
+#    错误：改 config.ini 的 listen 为 0.0.0.0:18090，但 ports 仍映射 8080
+#          →  端口映射与监听端口对不上，浏览器报"拒绝连接"
+# -----------------------------------------------------------------------------
 # =============================================================================
 
 services:
 
   # ---------------------------------------------------------------------------
-  # 精简版：只要 homevault 本体。Office 文件退化为"提示下载查看"。
+  # 精简版：只有 homevault 本体（约 25–40 MB）。
+  # Office 文件不会做服务端转换，前端退化为"提示下载查看"。
   # ---------------------------------------------------------------------------
   homevault-lite:
     build:
-      # 构建上下文是仓库根目录（Dockerfile 里需要 go.mod / main.go / internal/ / web/）
       context: ..
       dockerfile: deploy/Dockerfile.lite
+      args:
+        APP_UID: ${APP_UID:-10001}
+        APP_GID: ${APP_GID:-10001}
     image: homevault:lite
     container_name: homevault-lite
     profiles: ["lite"]
     restart: unless-stopped
 
-    # 只绑本机。想要局域网直连（不推荐）改成 "8080:8080"。
     ports:
-      - "127.0.0.1:8080:8080"
+      # 左边是宿主机端口（可自定义），右边固定 8080（容器内监听端口）。
+      # HOST_BIND=0.0.0.0   局域网其他设备可访问
+      # HOST_BIND=127.0.0.1 只有本机能访问（前面挂反向代理时用）
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8080}:8080"
 
     volumes:
-      # 唯一的持久化位置：config.ini、files/、trash/、audit/、uploads/、cache/、state.json
-      # 宿主机目录需要让容器里的 uid 10001 可写：sudo chown -R 10001:10001 ./data
+      # 唯一的持久化位置：config.ini、files/、trash/、audit/、uploads/、
+      # cache/、state.json 全在这里。
+      # 宿主机目录属主必须是 APP_UID（默认 10001），否则容器写不进去：
+      #   sudo chown -R 10001:10001 ./data
       - ./data:/data
 
     environment:
-      # 审计日志按天分文件、时间显示都依赖时区。改成自己所在的时区。
-      TZ: Asia/Shanghai
+      TZ: ${TZ:-Asia/Shanghai}
 
     # 不要开 read_only: true。
-    # homevault 整个空间目录都在 /data 下持续写入，而且管理页面改"存储位置"时
-    # 还会回写 /data/config.ini。只读根文件系统会让这些写入以 500 的形式暴露出来。
+    # homevault 整个空间目录都在 /data 下持续写入，而且管理页面改"存储位置"
+    # 时还会回写 /data/config.ini。只读根文件系统会让这些写入以 500 报出来。
     # read_only: true
 
-    # 健康检查默认注释掉：本镜像基于 alpine，**不带 curl**，
-    # 且刻意没有为了让 healthcheck 能跑就多装一个包。
-    # 三种可选做法见下方注释。
+    # 健康检查默认注释掉：镜像里不带 curl，刻意没有为了 healthcheck 多装包。
+    # 推荐在宿主机上探活（不依赖容器内工具）：
+    #   curl -fsS http://127.0.0.1:18090/api/healthz
     #
-    # 做法 A（推荐）：在宿主机上探活，不依赖容器内工具
-    #   curl -fsS http://127.0.0.1:8080/api/healthz
-    #
-    # 做法 B：自定义镜像里 `apk add --no-cache wget`，然后打开下面这段：
+    # 若想用 compose 自带的 healthcheck，先让镜像里有 wget：
     # healthcheck:
     #   test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/healthz"]
     #   interval: 30s
     #   timeout: 5s
     #   retries: 3
     #   start_period: 10s
-    #
-    # 做法 C：完全依赖 restart: unless-stopped 兜底（当前选择）。
 
   # ---------------------------------------------------------------------------
-  # 完整版：debian + LibreOffice + 中文字体，服务端把 Office 转成 PDF 预览。
-  # 镜像大、构建慢，只在确实需要 Office 预览时启用。
+  # 完整版：debian + LibreOffice + 中文字体（约 700 MB–1 GB）。
+  # 服务端把 Word/Excel/PPT 转成 PDF，供浏览器在线预览。
+  # 镜像大、构建慢（国内首次构建 10–20 分钟），确实需要 Office 预览才启用。
   # ---------------------------------------------------------------------------
   homevault-full:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.full
       args:
-        # 容器内运行用户的 UID/GID。宿主机上若 10001 已被占用，改这里即可，
-        # 不需要再去改 Dockerfile（改了会在 git pull 时冲突）。
-        # 建议与宿主机数据目录的属主保持一致：
+        # 容器内运行用户的 UID/GID。宿主机上 10001 被占用时必须改。
+        # 改完记得同步修改宿主机数据目录属主：
         #   sudo chown -R 18090:18090 ./data-full
         APP_UID: ${APP_UID:-10001}
         APP_GID: ${APP_GID:-10001}
-        # Debian 软件源镜像。默认阿里云，国内构建不会超时。
-        # 海外构建可改成：APT_MIRROR: deb.debian.org
+        # Debian 软件源镜像。默认阿里云，国内构建不会卡在超时上。
+        # 海外构建可改成：APT_MIRROR=deb.debian.org
         APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
     image: homevault:full
     container_name: homevault-full
@@ -90,28 +111,22 @@ services:
     restart: unless-stopped
 
     ports:
-      # 两个 profile 不要同时起（端口不同其实也可以同时起，但两套数据完全独立，容易混淆）
-      - "127.0.0.1:8081:8080"
+      # 两个 profile 不要同时启用：端口不同虽能共存，但两套数据完全独立，
+      # 容易搞混哪个是哪个。
+      # ⚠️ 想让局域网其他设备访问，必须在 .env 里设 HOST_BIND=0.0.0.0
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8081}:8080"
 
     volumes:
       - ./data-full:/data
 
     environment:
-      TZ: Asia/Shanghai
-      # 镜像里已经 ENV 设好了，这里显式写出来方便你按需覆盖。
-      # 换成自定义路径时，记得把文件也挂进容器。
+      TZ: ${TZ:-Asia/Shanghai}
+      # 镜像里已 ENV 设好，这里显式写出便于覆盖。
+      # 换成自定义路径时记得把可执行文件也挂进容器。
       HOMEVAULT_SOFFICE: /usr/bin/soffice
 
-    # 转换 Office 需要比 lite 版多一点资源；按实际并发上传量调整。
+    # 转换 Office 比较吃资源，按实际并发调整。
     # cpus: "2.0"
     # mem_limit: 2g
 
     # 同样不要 read_only: true（理由见 lite 服务的注释）。
-    #
-    # healthcheck（同样默认注释掉，镜像里没有 curl）：
-    # healthcheck:
-    #   test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
-    #   interval: 30s
-    #   timeout: 5s
-    #   retries: 3
-    #   start_period: 30s

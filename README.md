@@ -48,7 +48,12 @@ HomeVault 是一个**自托管的私有网盘**：把它跑在自己的小服务
 - [4. 界面预览](#4-界面预览)
 - [5. 运行环境](#5-运行环境)
 - [6. 下载与安装](#6-下载与安装)
-- [7. 快速启动](#7-快速启动)
+- [7. 从零部署（完整流程）](#7-从零部署完整流程)
+  - [方式 A：Docker Compose](#方式-adocker-compose推荐含-office-预览)
+  - [方式 B：Linux 二进制 + systemd](#方式-blinux-二进制--systemd不装-docker)
+  - [方式 C：Windows 直接运行](#方式-cwindows-直接运行最快)
+  - [方式 D：从源码运行](#方式-d从源码运行开发用)
+  - [部署后的检查清单](#部署后的检查清单)
 - [8. 配置说明](#8-配置说明)
 - [9. 使用方法与客户端接入](#9-使用方法与客户端接入)
 - [10. 部署与运维](#10-部署与运维)
@@ -236,129 +241,351 @@ Get-FileHash .\homevault-windows-amd64.zip -Algorithm SHA256
 
 ---
 
-## 7. 快速启动
+## 7. 从零部署（完整流程）
 
-### 方式一：Windows 双击启动
+本章从"拿到一台干净的机器"开始写。**不需要预先懂 Go、Docker 或 Linux**，照着做即可。
 
-1. 下载 `homevault-windows-amd64.zip` 并解压到一个**有写入权限**的目录（例如 `D:\HomeVault`，不要放在 `C:\Program Files`）。
-2. 双击 `homevault.exe`。
-   > 不带任何参数时等价于 `homevault serve`，会直接启动服务。
-3. 第一次运行会自动在当前目录生成 `config.ini`，并在系统默认空间目录（`C:\HomeVaultSpace`）建好数据骨架。
+先做一次选择——三种方式各自适合谁：
+
+| 方式 | 适合场景 | 需要装什么 | 首次耗时 | 能否预览 Office |
+| --- | --- | --- | --- | --- |
+| **A. Docker Compose**（推荐） | 家里 / 公司内网长期运行，想在线预览 Office | 只要 Docker | 10–20 分钟 | ✅ 用 full 版可以 |
+| **B. 二进制 + systemd** | 有 Linux 服务器，不想装 Docker | 无，就一个二进制 | 3 分钟 | ❌ 需自己装 LibreOffice |
+| **C. Windows 直接运行** | 自己电脑上临时用、给家人共享 | 无 | 1 分钟 | ❌ 需自己装 LibreOffice |
+
+> **"Office 预览"指什么**：在浏览器里直接打开 Word / Excel / PPT，不用先下载。这需要服务端有 LibreOffice（约 700 MB），所以只有 Docker 的 full 版是开箱即用的。
+>
+> 图片、PDF、文本、音视频的预览**任何方式都支持**，不需要 LibreOffice。
+
+---
+
+### 方式 A：Docker Compose（推荐，含 Office 预览）
+
+#### A1. 确认 Docker 可用
+
+```bash
+docker --version
+docker compose version
+```
+
+两条都要有输出。**`docker compose`（中间空格）是 v2 写法**；只有 `docker-compose`（带横杠）说明是 v1，本项目需要 v2。
+
+- **Linux 没装 Docker**：
+
+  ```bash
+  curl -fsSL https://get.docker.com | sudo sh
+  sudo systemctl enable --now docker
+  sudo usermod -aG docker $USER     # 加完重新登录才生效
+  ```
+
+- **Windows / macOS**：装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，确保它正在运行（任务栏图标是绿的）。
+
+#### A2. 先定三件事（想清楚再动手，避免返工）
+
+| 要定的事 | 举例 | 怎么选 |
+| --- | --- | --- |
+| **数据存放目录** | `/mnt/data` | 选空间大的盘。用户文件、回收站、审计日志都在这里 |
+| **对外端口** | `18090` | 挑一个没被占用的。查占用：`ss -lntp \| grep 18090` |
+| **运行用户 UID / GID** | `18090` | 见下方说明 |
+
+**关于 UID（最容易出问题的一步）：**
+
+容器内的进程以某个 UID 运行，这个 UID 必须能写宿主机上的数据目录。
+
+```bash
+# 做法一（最省事）：直接用你自己的 UID/GID
+id -u        # 假设是 1000
+id -g        # 假设是 1000
+
+# 做法二：随便挑个数字，但要确认没被占用
+getent passwd 10001 || echo "10001 可用"
+```
+
+> **为什么要查 UID 是否被占用？** 如果容器用 UID 10001 运行，而宿主机上 10001 已经是别的服务（另一个容器、某个系统用户），两边会争抢同一批文件的权限，甚至可能让那个服务读到你的文件。`getent passwd <UID>` 没有输出就表示没被占用。
+
+#### A3. 获取源码
+
+```bash
+cd /opt
+sudo git clone https://github.com/MDDC0412/HomeVault.git
+sudo chown -R $USER:$USER /opt/HomeVault
+cd /opt/HomeVault
+```
+
+没有 git：去 Releases 下载 `homevault-<版本>-source.tar.gz`，解压到 `/opt/HomeVault`。
+
+#### A4. 创建 `.env`（**关键步骤**）
+
+所有自定义配置都写在这里。**不要去改 `docker-compose.yml`**，否则以后 `git pull` 会冲突。
+
+```bash
+cd /opt/HomeVault/deploy
+cp env.compose.example .env
+nano .env            # 或用 vim
+```
+
+改这几行即可：
+
+```ini
+# 局域网其他设备能访问；只本机访问就改 127.0.0.1
+HOST_BIND=0.0.0.0
+
+# 对外端口，浏览器访问 http://服务器IP:这个端口
+HOST_PORT=18090
+
+# 与 A2 定的 UID/GID 保持一致
+APP_UID=18090
+APP_GID=18090
+
+# Debian 软件源：国内保持阿里云，海外改 deb.debian.org
+APT_MIRROR=mirrors.aliyun.com
+
+TZ=Asia/Shanghai
+```
+
+#### A5. 建数据目录并设权限
+
+```bash
+cd /opt/HomeVault/deploy
+
+# full 版用 data-full，lite 版用 data
+sudo mkdir -p data-full
+
+# 属主必须与 APP_UID/APP_GID 一致，否则容器写入会 permission denied
+sudo chown -R 18090:18090 data-full
+```
+
+> 用 lite 版就把 `data-full` 全部换成 `data`。
+
+#### A6. 构建并启动
+
+```bash
+cd /opt/HomeVault/deploy
+docker compose --profile full up -d --build
+```
+
+首次构建要下载 Debian 基础镜像和 LibreOffice，**国内约 10–20 分钟**，滚动大量日志属正常。
+
+看到下面这行就是成功了：
+
+```
+ ✔ Container homevault-full  Started
+```
+
+**常见阻塞：**
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| `apt-get` 极慢或卡住 | `.env` 里 `APT_MIRROR=mirrors.aliyun.com` 写错了，改完重新 `--build` |
+| `failed to resolve source metadata for docker.io` | 拉不到 Docker Hub。给 Docker 配代理，见[第 13 章](#13-常见问题与故障排查) |
+| 构建成功但容器反复重启 | 数据目录权限不对，回到 A5 重新 `chown` |
+
+#### A7. 验证部署（**别跳过**）
+
+```bash
+# 1) 容器是否在跑
+docker compose --profile full ps
+# 状态应为 Up，不能是 Restarting / Exited
+
+# 2) 服务是否健康
+curl -s http://127.0.0.1:18090/api/healthz
+```
+
+第 2 步应返回：
+
+```json
+{"status":"ok","time":"2026-10-23T13:04:42Z","version":"0.1.0"}
+```
+
+**返回 `Connection refused` 时按顺序排查：**
+
+```bash
+# a. 端口号对不对？（HOST_PORT 是多少这里就填多少，别漏端口）
+curl -s http://127.0.0.1:18090/api/healthz
+
+# b. 容器真的在跑吗？
+docker compose --profile full ps
+
+# c. 日志里有报错吗？
+docker compose --profile full logs --tail=50
+
+# d. 容器内的 listen 是不是 8080？
+docker exec homevault-full cat /data/config.ini
+```
+
+> `d` 步是重点：容器内 `listen` **必须是 `0.0.0.0:8080`**。如果你把它改成了别的端口，Docker 的端口映射就对不上，浏览器报"拒绝连接"。详见[第 8 章](#8-配置说明)的"端口为什么有两个"。
+
+#### A8. 首次登录
+
+1. 浏览器打开 `http://<服务器IP>:<HOST_PORT>`，例如 `http://192.168.2.10:18090`
+2. 用 `admin` / `admin` 登录
+3. **系统强制要求改账号或密码**，改完进入管理页面
+4. 到「用户管理」创建普通用户，分配给你要用的人
+
+> ⚠️ **管理员账号没有文件存储空间**，只负责管理用户和看审计日志。要存文件必须建普通用户——这是有意设计，避免管理员权限与文件权限混在一起。
+
+#### A9. 让局域网其他设备访问
+
+如果 A4 设了 `HOST_BIND=0.0.0.0`，其他设备直接用 `http://服务器IP:端口` 访问。
+
+**访问不了时依次查：**
+
+```bash
+# 1) 是否在所有网卡上监听？应看到 0.0.0.0:18090
+ss -lntp | grep 18090
+
+# 2) 宿主机防火墙放行了吗
+sudo ufw allow 18090/tcp                                        # Ubuntu / Debian
+sudo firewall-cmd --add-port=18090/tcp --permanent \
+  && sudo firewall-cmd --reload                                 # CentOS / Rocky
+```
+
+> ⚠️ **Docker 的端口映射会绕过 firewalld / ufw**（Docker 直接操作 iptables）。这台机器若有公网 IP，`HOST_BIND=0.0.0.0` 可能让服务暴露到公网。只想内网用：在云厂商安全组里关掉该端口，或把 `HOST_BIND` 设成内网网卡 IP。
+
+#### A10. 停止与更新
+
+```bash
+cd /opt/HomeVault/deploy
+
+# 停止（数据保留在 ./data-full，不会丢）
+docker compose --profile full down
+
+# 更新
+cd /opt/HomeVault
+git pull
+cd deploy
+docker compose --profile full up -d --build
+```
+
+> 更新后浏览器按 `Ctrl + Shift + R` 强制刷新，清掉旧的前端缓存。
+
+#### A11. 完全卸载
+
+```bash
+cd /opt/HomeVault/deploy
+docker compose --profile full down          # 删容器
+docker rmi homevault:full                   # 删镜像
+sudo rm -rf data-full                       # 删数据（谨慎，无法恢复）
+```
+
+---
+
+### 方式 B：Linux 二进制 + systemd（不装 Docker）
+
+**没有 Office 预览**（除非自己装 LibreOffice）。
+
+#### B1. 下载安装
+
+```bash
+# 换成实际架构：amd64 / arm64 / armv7
+wget https://github.com/MDDC0412/HomeVault/releases/download/v0.1.0/homevault-linux-amd64.tar.gz
+tar -xzf homevault-linux-amd64.tar.gz
+sudo install -m 0755 homevault /usr/local/bin/homevault
+```
+
+#### B2. 建用户和目录
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin homevault
+sudo mkdir -p /etc/homevault /var/lib/homevault/HomeVaultSpace
+sudo chown -R root:root /etc/homevault
+sudo chown -R homevault:homevault /var/lib/homevault
+sudo chmod 0750 /etc/homevault /var/lib/homevault
+```
+
+#### B3. 写配置文件
+
+```bash
+sudo tee /etc/homevault/config.ini >/dev/null <<'EOF'
+listen = "0.0.0.0:18090"
+space_dir = "/var/lib/homevault/HomeVaultSpace"
+tls_cert = ""
+tls_key = ""
+admin_user = "admin"
+admin_password = "admin"
+EOF
+
+sudo chown root:root /etc/homevault/config.ini
+sudo chmod 0600 /etc/homevault/config.ini
+```
+
+> 与 Docker 不同，这里 `listen` **直接写你要用的端口**。
+
+#### B4. 装成系统服务
+
+```bash
+sudo cp /opt/HomeVault/deploy/homevault.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now homevault
+sudo systemctl status homevault
+```
+
+#### B5. 验证
+
+```bash
+curl -s http://127.0.0.1:18090/api/healthz
+sudo journalctl -u homevault -f        # 实时日志
+```
+
+---
+
+### 方式 C：Windows 直接运行（最快）
+
+1. 下载 `homevault-windows-amd64.zip`，解压到**有写权限**的目录（如 `D:\HomeVault`，**不要放 `C:\Program Files`**）。
+2. 双击 `homevault.exe`（不带参数等价于 `homevault serve`）。
+3. 首次运行自动生成 `config.ini`，并在 `C:\HomeVaultSpace` 建好数据骨架。
 4. 浏览器打开 <http://127.0.0.1:8080/>，用 `admin` / `admin` 登录。
-5. **首次登录会强制要求改账号或密码**，改完自动进入管理页面。
+5. 首次登录强制改账号或密码。
 
-> Windows 首次运行时如果弹出防火墙提示，选择"允许访问"（仅本机使用可选"专用网络"）。
+> 弹出防火墙提示时选"允许访问"。只本机用可选"专用网络"。
 
-### 方式二：Windows 命令行启动
+**改端口**：编辑 `config.ini` 的 `listen` 为 `"0.0.0.0:18090"`，重启程序。
+
+**命令行用法：**
 
 ```powershell
-# 进入解压目录
 cd D:\HomeVault
-
-# 最简：默认监听 0.0.0.0:8080，空间目录用系统默认
-.\homevault.exe serve
-
-# 指定配置文件（listen / space_dir 都写在配置文件里）
+.\homevault.exe serve                          # 默认 0.0.0.0:8080
 .\homevault.exe serve -config D:\HomeVault\config.ini
-
-# 调高日志级别排查问题（debug / info / warn / error）
-.\homevault.exe serve -log-level debug
-
-# 查看版本
+.\homevault.exe serve -log-level debug         # 排查问题
 .\homevault.exe version
-
-# 查看全部命令行用法
 .\homevault.exe help
 ```
 
-> `serve` 只接受 `-config` 和 `-log-level` 两个参数。**监听地址和空间目录都通过 `config.ini` 配置**（见[第 8 章](#8-配置说明)），没有 `-listen` / `-space` 之类的命令行参数——改完配置文件后重启进程生效。
+> `serve` 只接受 `-config` 和 `-log-level`。**监听地址与空间目录都在 `config.ini` 里配**，没有 `-listen` / `-space` 这类参数。
 
-### 方式三：Linux 二进制启动
+---
+
+### 方式 D：从源码运行（开发用）
 
 ```bash
-# 下载并解压
-tar -xzf homevault-linux-amd64.tar.gz
-cd homevault-linux-amd64
-
-# 赋予执行权限
-chmod +x homevault
-
-# 前台启动
-./homevault serve
-
-# 或指定配置文件
-./homevault serve -config /etc/homevault/config.ini
-
-# 排查问题时打开 debug 日志
-./homevault serve -log-level debug
+go version        # 必须 ≥ 1.24
+cd HomeVault
+go run . serve    # 零第三方依赖，不需要 go mod download
 ```
 
-长期运行时，空间目录请写在 `config.ini` 的 `space_dir` 里（如 `/var/lib/homevault`），然后重启进程。作为系统服务运行见[第 10 章](#10-部署与运维)。
-
-### 方式四：从源码运行
+编译成二进制：
 
 ```bash
-# 1) 确认 Go 版本 ≥ 1.24
-go version
-
-# 2) 进入源码目录（不需要 go mod download，本项目零依赖）
-cd HomeVault
-
-# 3) 直接运行
-go run . serve
-
-# 或先编译再运行
 go build -o homevault .
 ./homevault serve
 ```
 
 Windows 上把 `./homevault` 换成 `.\homevault.exe`。
 
-### 方式五：Docker
+---
 
-```bash
-# 精简版（推荐，镜像约 25–40 MB）
-docker run -d \
-  --name homevault \
-  -p 8080:8080 \
-  -v /srv/homevault/space:/data \
-  --restart unless-stopped \
-  homevault:lite
+### 部署后的检查清单
 
-# 完整版（约 700 MB–1 GB，额外带 LibreOffice，支持 Office 转 PDF 预览）
-docker run -d \
-  --name homevault-full \
-  -p 8080:8080 \
-  -v /srv/homevault/space:/data \
-  --restart unless-stopped \
-  homevault:full
-```
+不论用哪种方式，建议逐项过一遍：
 
-也可以直接用仓库里的 `deploy/Dockerfile.lite` / `deploy/Dockerfile.full` 自行构建：
-
-```bash
-docker build -f deploy/Dockerfile.lite -t homevault:lite .
-docker build -f deploy/Dockerfile.full -t homevault:full .
-```
-
-### 方式六：Docker Compose
-
-仓库提供了 `deploy/docker-compose.yml`：
-
-```bash
-cd deploy
-docker compose up -d
-
-# 查看日志
-docker compose logs -f
-
-# 停止
-docker compose down
-```
-
-`docker-compose.yml` 里已经把空间目录挂载到宿主机、设置了 `restart` 策略。**修改任何配置后需要 `docker compose up -d` 重建容器**（`restart` 不会重新读取挂载或环境变量变更）。
-
-> 完整的环境变量、端口、卷说明见 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+- [ ] `/api/healthz` 返回 `{"status":"ok",...}`
+- [ ] 浏览器能打开首页并登录
+- [ ] 已改掉默认的 `admin` / `admin`
+- [ ] 已创建至少一个**普通用户**（管理员不能存文件）
+- [ ] 用普通用户上传一个文件并能下载回来
+- [ ] 数据目录在宿主机上能找到，属主正确
+- [ ] Docker 场景：`down` 再 `up` 后数据还在（验证持久化）
 
 ---
 
@@ -415,8 +642,28 @@ admin_password = "改成你自己的强密码"
 | --- | --- |
 | `config.ini` 里的**任何字段**（`listen`、`space_dir`、TLS、管理员账号） | **需要重启进程** |
 | 管理页面「存储与设置」里的运行期参数（默认配额、默认限速、回收站保留期、上传体积上限等） | **不需要**，保存后立即生效 |
+| Docker 场景的 `.env`（端口、UID、镜像源） | **需要重建容器**：`docker compose --profile full up -d --build` |
 
 运行期参数只影响**之后新建的账号**或**之后被删除的文件**，不会追溯改动已有数据。
+
+### 端口为什么有两个（Docker 场景必读）
+
+这是最容易踩的坑。Docker 部署时涉及两个端口，**它们不是同一个**：
+
+```
+浏览器  ──→  宿主机:18090  ──[Docker 端口映射]──→  容器内:8080
+              ↑                                      ↑
+      改 .env 里的 HOST_PORT              改 config.ini 里的 listen
+```
+
+| 部署方式 | 改哪里 | 举例 |
+| --- | --- | --- |
+| **Docker**（几乎总是这种） | 改 `.env` 的 `HOST_PORT`，**不要动 `config.ini`** | `HOST_PORT=18090` → 访问 `http://IP:18090` |
+| 二进制 / systemd / Windows | 改 `config.ini` 的 `listen` | `listen = "0.0.0.0:18090"` |
+
+**典型错误**：把 `config.ini` 的 `listen` 改成 `0.0.0.0:18090`，但 compose 里仍是 `18090:8080`。容器内部在 18090 监听，Docker 却把宿主机 18090 转发到容器 8080——那里没人监听，浏览器就报 **"拒绝连接"**。
+
+> Docker 场景请保持 `config.ini` 的 `listen = "0.0.0.0:8080"` 不变。容器启动时会自动生成正确配置（见 `deploy/docker-entrypoint.sh`），不需要你手动写。
 
 ### 空间目录内部结构
 
@@ -536,19 +783,22 @@ HomeVault 提供标准 HTTP + JSON 接口和浏览器页面，**不提供 WebDAV
 - 默认 `0.0.0.0:8080`，即监听所有网卡的 8080 端口。
 - 只在本机反代后面跑时，应改成 `127.0.0.1:8080`，避免直接暴露到公网。
 - 改端口改 `config.ini` 的 `listen` 后**需要重启**。
+- **Docker 场景例外**：容器内固定监听 8080，对外端口由 `.env` 的 `HOST_PORT` 决定，不要把 `listen` 改成对外端口。详见[第 8 章](#端口为什么有两个docker-场景必读)。
 
 ### 后台运行
 
 **Linux（systemd，推荐）**
 
-仓库提供了 `deploy/litedrive.service` 作为模板：
+仓库提供了 `deploy/homevault.service` 作为模板：
 
 ```bash
-sudo cp deploy/litedrive.service /etc/systemd/system/homevault.service
+sudo cp deploy/homevault.service /etc/systemd/system/homevault.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now homevault
 sudo systemctl status homevault
 ```
+
+完整的用户、目录、权限准备步骤见[第 7 章方式 B](#方式-blinux-二进制--systemd不装-docker)。
 
 **Linux（nohup 临时跑）**
 
@@ -570,6 +820,31 @@ nohup ./homevault serve > homevault.log 2>&1 &
 
 `state.json` 是全部账号与配置，**单独备份它就等于备份了完整账号体系**；用户文件在 `files/` 下是普通文件，任何备份工具都能处理。
 
+**关于 `/data/config.ini`（一个容易困惑的点）：**
+
+镜像在构建阶段**不会**写死 `config.ini`，而是在容器每次启动时由 `deploy/docker-entrypoint.sh` 检查：
+
+| 情况 | 行为 |
+| --- | --- |
+| `/data/config.ini` **不存在** | 自动生成一份容器场景正确的配置（`listen = 0.0.0.0:8080`、`space_dir = /data/HomeVaultSpace`） |
+| `/data/config.ini` **已存在** | **绝不覆盖**，你改过的端口、管理员账号全部保留 |
+
+这样设计是因为宿主机 bind mount 会覆盖镜像里 `/data` 的内容——如果配置写死在镜像里，挂载后就被盖掉，容器会退回 `/root/HomeVaultSpace` 并且因为没有写权限而启动失败。
+
+> 想自定义容器内的配置，直接编辑宿主机上的 `config.ini`（例如 `./data-full/config.ini`），然后 `docker compose restart`。管理页面的「存储与设置」也能改运行期参数，不需要动文件。
+
+**自定义 UID 时的权限要求：**
+
+```bash
+# 宿主机数据目录属主必须等于 APP_UID:APP_GID
+sudo chown -R 18090:18090 ./data-full
+
+# 验证
+stat -c '%u:%g %n' data-full
+```
+
+如果属主不对，容器日志里会出现 `permission denied`，且数据写入失败。
+
 ### 停止与重启
 
 ```bash
@@ -577,8 +852,10 @@ nohup ./homevault serve > homevault.log 2>&1 &
 sudo systemctl stop homevault
 sudo systemctl restart homevault
 
-# Docker
-docker stop homevault && docker start homevault
+# Docker Compose
+docker compose --profile full stop
+docker compose --profile full restart
+docker compose --profile full down      # 停止并删除容器（数据保留）
 
 # 前台运行时直接 Ctrl+C（会优雅关闭）
 ```
@@ -626,11 +903,13 @@ HomeVault/
 ├── deploy/                  # 部署相关模板
 │   ├── Dockerfile.lite      # 精简镜像（约 25–40 MB）
 │   ├── Dockerfile.full      # 完整镜像（带 LibreOffice）
-│   ├── docker-compose.yml   # Compose 编排
+│   ├── docker-entrypoint.sh # 容器入口：启动时补齐 config.ini
+│   ├── docker-compose.yml   # Compose 编排（支持 profiles: lite / full）
+│   ├── env.compose.example  # Compose 用环境变量示例（端口、UID、镜像源）
+│   ├── env.example          # 运行时环境变量示例（HOMEVAULT_SOFFICE、TZ）
 │   ├── Caddyfile            # Caddy 反代示例
 │   ├── nginx.conf           # Nginx 反代示例
-│   ├── litedrive.service    # systemd 单元模板
-│   └── env.example          # 环境变量示例
+│   └── homevault.service    # systemd 单元模板
 ├── docs/                    # 详细文档
 │   ├── API.md               # 完整 HTTP 接口参考（请求体、错误码）
 │   ├── CONFIG.md            # 配置项与运行期设置完整说明
@@ -789,6 +1068,73 @@ go vet ./...
 **症状**：找不到配置文件但服务却能启动。
 
 **说明**：这是正常的。**没有配置文件也能运行**，程序会使用全部默认值（`0.0.0.0:8080` + 系统默认空间目录）。
+
+### Docker 容器启动失败
+
+**症状**：`docker compose ps` 显示 `Restarting` 或 `Exited`，反复重启。
+
+按顺序查看原因：
+
+```bash
+# 1) 看容器日志（最快找到原因）
+docker compose --profile full logs --tail=50
+
+# 2) 看容器状态与退出码
+docker inspect homevault-full --format '{{.State.Status}} exit={{.State.ExitCode}}'
+```
+
+**常见原因对照：**
+
+| 日志关键字 | 原因 | 处理 |
+| --- | --- | --- |
+| `permission denied` | 数据目录属主与 `APP_UID` 不一致 | `sudo chown -R <APP_UID>:<APP_GID> ./data-full` |
+| `bind: address already in use` | 宿主机端口被占用 | 换 `HOST_PORT`，或 `ss -lntp \| grep 端口` 找出占用者 |
+| `no such file or directory` | 挂载路径写错 | 检查 `docker-compose.yml` 的 `volumes` 左侧路径是否存在 |
+| `exec format error` | 镜像架构与宿主机不符 | 在目标机器上重新构建，或换对应架构的镜像 |
+| `failed to resolve source metadata for docker.io` | 拉不到 Docker Hub 基础镜像 | 给 Docker 配代理（见下条） |
+
+### Docker 构建时拉不到镜像（国内网络）
+
+**症状**：`failed to fetch oauth token`、`dial tcp ... i/o timeout`、`failed to resolve source metadata for docker.io`。
+
+Docker Desktop 可在「Settings → Resources → Proxies」里配 HTTP/HTTPS 代理；Linux 上的 `dockerd` 用 systemd 环境变量：
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/proxy.conf >/dev/null <<'EOF'
+[Service]
+Environment="HTTP_PROXY=http://127.0.0.1:7890"
+Environment="HTTPS_PROXY=http://127.0.0.1:7890"
+Environment="NO_PROXY=localhost,127.0.0.1"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+> 注意：这里配的是 **dockerd 拉取镜像**用的代理。容器内部访问外网是另一件事（本项目不需要）。如果代理在同一台机器上，Linux 下 `127.0.0.1` 对 dockerd 有效；Docker Desktop（Windows/macOS）要用 `http://host.docker.internal:7890`。
+
+**只慢但不报错**（`apt-get` 阶段卡很久）：确认 `.env` 里 `APT_MIRROR=mirrors.aliyun.com`，然后重新 `--build`。
+
+### 局域网内其他设备访问不了
+
+**症状**：服务器本机能打开，别的电脑/手机打不开。
+
+```bash
+# 1) 端口是否在 0.0.0.0 上监听（不是 127.0.0.1）
+ss -lntp | grep 18090
+# 若显示 127.0.0.1:18090，说明只绑了本机：
+#   Docker 场景改 .env 的 HOST_BIND=0.0.0.0 后重建
+#   二进制场景改 config.ini 的 listen 为 "0.0.0.0:18090"
+
+# 2) 防火墙放行
+sudo ufw allow 18090/tcp
+sudo firewall-cmd --add-port=18090/tcp --permanent && sudo firewall-cmd --reload
+
+# 3) 从另一台机器测试连通性
+curl -v http://<服务器IP>:18090/api/healthz
+```
+
+> ⚠️ **Docker 的端口映射会绕过 ufw / firewalld**（直接写 iptables）。如果上面都放行了还不通，检查云厂商的安全组，以及 `iptables -L DOCKER -n` 里的实际规则。
 
 ### 端口被占用
 

@@ -89,12 +89,31 @@ docker build -f deploy/Dockerfile.lite -t homevault:lite .
 docker build -f deploy/Dockerfile.full -t homevault:full .
 ```
 
+两个 Dockerfile 都支持三个构建参数，**宿主机上 10001 被占用时必须改前两个**：
+
+```bash
+docker build -f deploy/Dockerfile.full \
+  --build-arg APP_UID=18090 \
+  --build-arg APP_GID=18090 \
+  --build-arg APT_MIRROR=mirrors.aliyun.com \
+  -t homevault:full .
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `APP_UID` | `10001` | 容器内运行用户的 UID。必须与宿主机数据目录属主一致 |
+| `APP_GID` | `10001` | 同上，GID |
+| `APT_MIRROR` | `mirrors.aliyun.com` | 仅 full 版用。Debian 软件源，海外构建可改 `deb.debian.org` |
+
+用 `getent passwd <UID>` 确认 UID 未被占用：没有输出即为可用。
+
 `.dockerignore` 已经排除了 `dist/`、`.git/`、`.gocache/`、`.gopath/`、`.gotmp/`、`data/` 等不需要进构建上下文的内容。
 
 ### 2.2 运行
 
 ```bash
 mkdir -p ./data
+sudo chown -R 10001:10001 ./data      # 改成你构建时的 APP_UID:APP_GID
 
 # 精简版
 docker run -d --name homevault \
@@ -115,40 +134,66 @@ docker run -d --name homevault-full \
 
 | 项 | 值 |
 | --- | --- |
-| 工作目录 | `/data`（`WORKDIR /data`，因此 `config.ini` 默认落在 `/data/config.ini`） |
-| 启动命令 | `/homevault serve -config /data/config.ini` |
-| 空间目录 | `/data/HomeVaultSpace`（`Dockerfile` 里写好了 `space_dir = "/data/HomeVaultSpace"`） |
+| 工作目录 | `/data`（`WORKDIR /data`） |
+| 入口脚本 | `/docker-entrypoint.sh`（启动时检查并补齐 `config.ini`，见下） |
+| 空间目录 | `/data/HomeVaultSpace` |
 | 数据卷 | `VOLUME /data` |
-| 端口 | `EXPOSE 8080`（容器内监听 `0.0.0.0:8080`） |
-| 运行用户 | 非 root，uid / gid 均为 `10001`（用户 `homevault`） |
-| 时区与证书 | `tzdata`（审计日志按天分文件、日志时间显示）+ `ca-certificates`（需要访问外网时） |
+| 端口 | `EXPOSE 8080`（容器内**固定**监听 `0.0.0.0:8080`） |
+| 运行用户 | 非 root，默认 uid / gid 均为 `10001`，可用 `APP_UID`/`APP_GID` 改 |
+| 时区与证书 | `tzdata`（审计日志按天分文件、日志时间显示）+ `ca-certificates` |
 
-关于 `read_only: true`：**不要**给这个容器开只读根文件系统。HomeVault 的整个空间目录（`files/`、`trash/`、`audit/`、`uploads/`、`cache/`、`state.json`）都在 `/data` 下持续写入，虽然 `/data` 是卷、理论上可以在 `read_only: true` + `tmpfs` 下跑，但 `/data/config.ini` 也需要能被改写（管理页面改"存储位置"时会回写它），一旦某个路径写不进去就会以 `500 internal_error` 的形式暴露在界面上。**保持默认（可写）最省事**。
+**`config.ini` 从哪来（重要）：**
 
-> `--user 10001:10001` 不需要额外指定，镜像里已经 `USER homevault`。宿主机的 `./data` 目录需要让 uid 10001 可写：`sudo chown -R 10001:10001 ./data`。
+镜像**不会**在构建期把 `config.ini` 写进 `/data`。原因是 `VOLUME /data` + 宿主机 bind mount 会在运行时用宿主目录覆盖整个 `/data`，构建期写入的内容必然被盖掉；而二进制发现配置缺失时会生成模板，模板里 `space_dir = ""` 解析成 `/root/HomeVaultSpace`，非 root 用户无权创建，容器直接启动失败。
+
+改由 `deploy/docker-entrypoint.sh` 在每次启动时处理：
+
+| 情况 | 行为 |
+| --- | --- |
+| `/data/config.ini` 不存在 | 生成一份容器场景正确的配置（`listen = 0.0.0.0:8080`、`space_dir = /data/HomeVaultSpace`） |
+| `/data/config.ini` 已存在 | **绝不覆盖**，保留你改过的端口、管理员账号等 |
+
+所以想改容器内配置，直接编辑宿主机上的 `./data-full/config.ini` 然后重启容器即可，不会因为重建镜像丢失。脚本最后用 `exec` 启动主进程，`docker stop` 的 SIGTERM 能直达 homevault，正常保存 `state.json`。
+
+关于 `read_only: true`：**不要**给这个容器开只读根文件系统。HomeVault 整个空间目录（`files/`、`trash/`、`audit/`、`uploads/`、`cache/`、`state.json`）都在 `/data` 下持续写入，且管理页面改"存储位置"时会回写 `/data/config.ini`，一旦某处写不进去就会以 `500 internal_error` 暴露在界面上。**保持默认可写最省事**。
+
+> `--user` 不需要手动指定，镜像里已 `USER ${APP_UID}:${APP_GID}`。宿主机数据目录必须让该 UID 可写：`sudo chown -R 10001:10001 ./data`（或你自定义的 UID）。
 
 ### 2.3 docker-compose
 
 ```bash
 cd deploy
+cp env.compose.example .env     # 首次部署：复制后按需修改
 
 # 只起精简版
-docker compose --profile lite up -d
+docker compose --profile lite up -d --build
 
 # 只起完整版（带 Office 预览）
-docker compose --profile full up -d
+docker compose --profile full up -d --build
 
 # 查看日志
-docker compose logs -f homevault-lite
+docker compose logs -f homevault-full
 ```
 
-数据落在 `deploy/data/` 与 `deploy/data-full/`（可在 compose 里改成绝对路径）。两个服务都绑定 `127.0.0.1:8080` / `127.0.0.1:8081`，**建议前面挂一层反向代理**（见 §4），不要直接暴露端口。
+所有可自定义项都在 `deploy/.env` 里，**不需要改 `docker-compose.yml`**（改后者会和 `git pull` 冲突）：
 
-关于健康检查：镜像里是 `alpine` / `distroless` 风格的最小根文件系统，**不一定有 `wget` 或 `curl`**，所以 compose 里的 `healthcheck` 默认是注释掉的。三种可选做法：
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `HOST_BIND` | `127.0.0.1` | 宿主机监听地址。局域网访问改 `0.0.0.0` |
+| `HOST_PORT` | `8080` / `8081` | 宿主机端口（浏览器访问用这个） |
+| `APP_UID` / `APP_GID` | `10001` | 容器内运行用户，须与数据目录属主一致 |
+| `APT_MIRROR` | `mirrors.aliyun.com` | Debian 源，仅 full 版构建时用 |
+| `TZ` | `Asia/Shanghai` | 审计日志与界面时间 |
+
+数据落在 `deploy/data/` 与 `deploy/data-full/`（可在 compose 里改成绝对路径）。
+
+> ⚠️ **端口不要改错地方**：容器内始终监听 8080，对外端口由 `HOST_PORT` 决定。如果去改 `config.ini` 的 `listen`，映射就对不上，浏览器会报"拒绝连接"。
+
+关于健康检查：镜像是最小根文件系统，**不带 `curl`**，所以 compose 里的 `healthcheck` 默认注释掉。三种可选做法：
 
 1. **不配健康检查**（默认），靠 `restart: unless-stopped` 兜底；
-2. 自己扩展镜像加一个静态 `wget`（`apk add --no-cache wget`），再用 `wget -qO- http://127.0.0.1:8080/api/healthz`；
-3. 在**宿主机**上用 `curl -fsS http://127.0.0.1:8080/api/healthz` 做外部探活（`/api/healthz` 不需要登录，是最合适的探活端点）。
+2. 自己扩展镜像加 `wget`（`apk add --no-cache wget`），再用 `wget -qO- http://127.0.0.1:8080/api/healthz`；
+3. 在**宿主机**上用 `curl -fsS http://127.0.0.1:8080/api/healthz` 做外部探活（`/api/healthz` 不需要登录，最适合探活）。
 
 ### 2.4 在容器里使用管理命令
 

@@ -1,17 +1,17 @@
 # =============================================================================
-# litedrive 精简版镜像（约 25–40 MB）
+# homevault 精简版镜像（约 25–40 MB）
 #
-#   docker build -f deploy/Dockerfile.lite -t litedrive:lite .
-#   docker run -d --name litedrive -p 127.0.0.1:8080:8080 \
-#     -v "$PWD/data:/data" --restart unless-stopped litedrive:lite
+#   docker build -f deploy/Dockerfile.lite -t homevault:lite .
+#   docker run -d --name homevault -p 127.0.0.1:8080:8080 \
+#     -v "$PWD/data:/data" --restart unless-stopped homevault:lite
 #
-# 特点：只有 litedrive 本体。Word/Excel/PPT 这类文件不会做服务端转换，
+# 特点：只有 homevault 本体。Word/Excel/PPT 这类文件不会做服务端转换，
 #       前端会退化为"提示下载查看"（接口返回 409 office_preview_unavailable）。
 #       需要服务端 Office→PDF 预览请改用 deploy/Dockerfile.full。
 #
 # 注意：构建上下文是**仓库根目录**（不是 deploy/），因为需要 go.mod / main.go /
 #       internal/ / web/。如果你在 deploy/ 目录里执行 docker build，请改成
-#       `docker build -f Dockerfile.lite -t litedrive:lite ..`
+#       `docker build -f Dockerfile.lite -t homevault:lite ..`
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ COPY web/ ./web/
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
       -ldflags "-s -w" \
-      -o /out/litedrive .
+      -o /out/homevault .
 
 # ---------------------------------------------------------------------------
 # 阶段 2：运行
@@ -45,44 +45,40 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # ---------------------------------------------------------------------------
 FROM alpine:3.21
 
+# ---------------------------------------------------------------------------
+# 运行用户 UID / GID，可在构建时覆盖（详见 Dockerfile.full 的说明）：
+#   docker build -f deploy/Dockerfile.lite \
+#     --build-arg APP_UID=18090 --build-arg APP_GID=18090 -t homevault:lite .
+# ---------------------------------------------------------------------------
+ARG APP_UID=10001
+ARG APP_GID=10001
+
 # ca-certificates：进程需要访问外网时（例如将来做 WebDAV 客户端）用得上。
 # tzdata：审计日志按天分文件、日志时间显示都依赖时区数据库。
 # 不装 LibreOffice —— 需要 Office 预览请用 Dockerfile.full。
 RUN apk add --no-cache ca-certificates tzdata \
- && addgroup -g 10001 -S litedrive \
- && adduser  -u 10001 -S -D -H -G litedrive litedrive
+ && addgroup -g "${APP_GID}" -S homevault \
+ && adduser  -u "${APP_UID}" -S -D -H -G homevault homevault
 
-# 引导配置：只写"改了就换进程形态"的必须项。
-#   listen      监听 0.0.0.0:8080（容器里必须监听 0.0.0.0，否则端口映射不通）
-#   space_dir   /data/HomeVaultSpace —— 落在数据卷上，容器重建不丢数据
-# 其余参数（配额、限速、保留期、分片大小、Office 预览模式……）都在管理页面里改，
-# 存在 <space_dir>/state.json，改完立即生效，不需要重建镜像。
-RUN printf '%s\n' \
-      '# litedrive 引导配置（容器内）' \
-      'listen = "0.0.0.0:8080"' \
-      'space_dir = "/data/HomeVaultSpace"' \
-      '# 内置 HTTPS 与反向代理二选一；容器场景推荐由外层反代终结 TLS。' \
-      'tls_cert = ""' \
-      'tls_key = ""' \
-      '# 只在首次启动（/data 里还没有 state.json）时读取。登录后会强制要求改账号或密码。' \
-      'admin_user = "admin"' \
-      'admin_password = "admin"' \
-      > /data/config.ini \
- && chown 10001:10001 /data /data/config.ini \
- && chmod 0600 /data/config.ini
+# 引导配置不在这里写。
+# 原因：`VOLUME /data` + 宿主机 bind mount 会在运行时用宿主目录覆盖整个 /data，
+# 构建期写进 /data/config.ini 的内容会被盖掉。改由 /docker-entrypoint.sh
+# 在启动时补一份容器场景正确的配置（存在则不覆盖，你改过的值会保留）。
+RUN mkdir -p /data/HomeVaultSpace \
+ && chown -R "${APP_UID}:${APP_GID}" /data
 
-# 数据卷与工作目录：config.ini 的默认位置就是 WORKDIR，
-# 所以 `-config /data/config.ini` 其实等价于在 /data 下直接跑。
+# 数据卷与工作目录：config.ini 的默认位置就是 WORKDIR。
 VOLUME ["/data"]
 WORKDIR /data
 
 EXPOSE 8080
 
-COPY --from=build /out/litedrive /litedrive
-RUN chmod 0755 /litedrive
+COPY --from=build /out/homevault /homevault
+COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod 0755 /homevault /docker-entrypoint.sh
 
-USER 10001:10001
+USER ${APP_UID}:${APP_GID}
 
-# 用 exec 形式（不是 shell 形式），保证 litedrive 是 PID 1，
-# 能直接收到 docker stop 的 SIGTERM 并优雅退出（保存 state.json）。
-ENTRYPOINT ["/litedrive", "serve", "-config", "/data/config.ini"]
+# 用 exec 形式（不是 shell 形式），保证 homevault 能直接收到 docker stop 的
+# SIGTERM 并优雅退出（保存 state.json）。entrypoint 内部最后是 exec。
+ENTRYPOINT ["/docker-entrypoint.sh"]
