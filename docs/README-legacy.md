@@ -173,7 +173,7 @@ sudo journalctl -u homevault -f
 控制台会打印：
 
 ```
-  homevault 0.1.0 已启动
+  homevault 0.1.1 已启动
   ─────────────────────────────────────────────
   用户端：  http://127.0.0.1:8080/
   管理端：  http://127.0.0.1:8080/admin/
@@ -278,7 +278,7 @@ homevault help
 | `migrate-space` | 把空间目录整体搬迁到新位置：复制 → 校验 → 改写 `config.ini` → 提示重启。**不删除旧数据** |
 | `setpass` | 重置某个账号的密码；不给 `-password` 会随机生成 16 位并打印到控制台 |
 | `adduser` | 命令行创建账号（也可以全程在 `/` 页面的「用户」里做） |
-| `version` | 打印版本号（当前 `0.1.0`） |
+| `version` | 打印版本号（当前 `0.1.1`） |
 | `help` | 打印帮助（`-h` / `--help` 同效；`-v` / `--version` 等于 `version`） |
 
 对应关系：`migrate-space` 等价于升级与换盘流程里的数据搬迁；`setpass` 用于"管理员密码忘了"；`adduser` 用于批量初始化。

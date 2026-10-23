@@ -28,7 +28,7 @@ import (
 )
 
 // Version 由 main 注入。
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 const sessionCookie = "homevault_session"
 

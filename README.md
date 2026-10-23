@@ -394,7 +394,7 @@ curl -s http://127.0.0.1:18090/api/healthz
 第 2 步应返回：
 
 ```json
-{"status":"ok","time":"2026-10-23T13:04:42Z","version":"0.1.0"}
+{"status":"ok","time":"2026-10-23T13:04:42Z","version":"0.1.1"}
 ```
 
 **返回 `Connection refused` 时按顺序排查：**
@@ -478,7 +478,7 @@ sudo rm -rf data-full                       # 删数据（谨慎，无法恢复�
 
 ```bash
 # 换成实际架构：amd64 / arm64 / armv7
-wget https://github.com/MDDC0412/HomeVault/releases/download/v0.1.0/homevault-linux-amd64.tar.gz
+wget https://github.com/MDDC0412/HomeVault/releases/download/v0.1.1/homevault-linux-amd64.tar.gz
 tar -xzf homevault-linux-amd64.tar.gz
 sudo install -m 0755 homevault /usr/local/bin/homevault
 ```
@@ -1267,7 +1267,7 @@ netstat -ano | findstr :8080
 
 ### 当前版本
 
-**`0.1.0`**
+**`0.1.1`**
 
 查看方式：
 
@@ -1276,6 +1276,26 @@ netstat -ano | findstr :8080
 ```
 
 管理页面「关于与帮助」也会显示当前版本与运行时信息。
+
+### 0.1.1 主要变更
+
+**修复：Office / PDF / 图片预览全部无法显示**
+
+预览通过 `<iframe>` 加载，但服务端对所有响应都下发 `X-Frame-Options: DENY` 和 CSP `frame-ancestors 'none'`，浏览器据此拒绝渲染内嵌页面。表现为点开 Excel / Word / PPT / PDF / 图片后，预览区显示"**拒绝连接**"或空白。
+
+现在按路径区分：预览接口（`/api/preview`、`/api/preview/office`、`/api/fs/download`）返回 `SAMEORIGIN`，允许本站在 iframe 内展示；其余页面保持 `DENY`，继续防御点击劫持。新增回归测试锁死这一行为。
+
+**修复：Docker 部署的若干问题**
+
+- 镜像构建期写入的 `config.ini` 会被数据卷挂载覆盖，导致容器退回默认空间目录且无写权限而启动失败。改由入口脚本在启动时按需生成，已存在的配置不覆盖。
+- LibreOffice 路径的环境变量名不一致，显式指定时实际未生效。
+- 容器运行 UID 原先硬编码，改为 `APP_UID` / `APP_GID` 构建参数，避免与宿主机已有用户冲突。
+- 新增 `deploy/env.compose.example`，端口、UID、软件源等自定义项集中到 `.env`，无需修改 `docker-compose.yml`。
+
+**文档**
+
+- 第 7 章重写为「从零部署（完整流程）」，覆盖 Docker Compose / Linux 二进制 + systemd / Windows 三种方式，每步含验证命令与常见故障处理。
+- 新增「端口为什么有两个」一节，说明 Docker 场景下 `HOST_PORT` 与 `config.ini` 的 `listen` 是两个不同端口。
 
 ### 0.1.0 主要能力
 

@@ -1,7 +1,7 @@
 # HomeVault HTTP API 契约
 
 > 本文以 **Go 后端实际实现** 为准（`internal/server/*.go`、`internal/core/*.go`）。
-> 版本：`server.Version = "0.1.0"`（定义于 `internal/server/server.go`）。
+> 版本：`server.Version = "0.1.1"`（定义于 `internal/server/server.go`）。
 > 所有接口都在 `/api/` 下；任何未列出的 `/api/...` 路径返回 `404 not_found`。
 
 ---
@@ -147,7 +147,7 @@
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "time": "2026-02-14T10:00:00.123456Z"
 }
 ```
@@ -228,7 +228,7 @@
   "officeAvailable": true,
   "sessionTTL": "168h",
   "spaceDir": "C:\\HomeVaultSpace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "permissionLabels": ["read","upload","modify","delete","trash_view","trash_manage","users_manage","logs_view"]
 }
 ```
@@ -1125,7 +1125,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
     "defaultSpaceDir": "C:\\HomeVaultSpace",
     "tlsEnabled": false,
     "officeAvailable": true,
-    "version": "0.1.0",
+    "version": "0.1.1",
     "permissionNames": ["read","upload","modify","delete","trash_view","trash_manage","users_manage","logs_view"]
   }
 }
@@ -1186,7 +1186,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "uptimeSeconds": 11532,
   "spaceDir": "/var/lib/homevault/HomeVaultSpace",
   "diskTotal": 107374182400,
@@ -1200,7 +1200,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "uptimeSeconds": 11532,
   "spaceDir": "/var/lib/homevault/HomeVaultSpace",
   "diskTotal": 107374182400,
@@ -1301,7 +1301,7 @@ J='Content-Type: application/json'
 
 # 0) 健康检查（不需要登录）
 curl -s $BASE/api/healthz
-# {"status":"ok","version":"0.1.0","time":"..."}
+# {"status":"ok","version":"0.1.1","time":"..."}
 
 # 1) 登录并保存 Cookie
 curl -s -c cookies.txt -X POST $BASE/api/auth/login -H "$J" \

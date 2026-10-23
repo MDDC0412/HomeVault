@@ -262,7 +262,7 @@ curl -s -b admin.txt 'http://127.0.0.1:8080/api/logs?limit=5'
 sudo systemctl stop homevault
 
 # 换回旧二进制
-sudo install -m 0755 -o root -g root /usr/local/bin/homevault-0.1.0 /usr/local/bin/homevault
+sudo install -m 0755 -o root -g root /usr/local/bin/homevault-0.1.1 /usr/local/bin/homevault
 
 # 如果新版本改动过 state.json 的结构，把升级前的备份也放回去
 sudo rsync -aHAX --delete /mnt/backup/pre-upgrade-2026-02-14/HomeVaultSpace/ \
@@ -271,7 +271,7 @@ sudo rsync -aHAX --delete /mnt/backup/pre-upgrade-2026-02-14/HomeVaultSpace/ \
 sudo systemctl start homevault
 ```
 
-> **重要**：回滚二进制是安全的，但**回滚数据要慎重**。HomeVault 的元数据是单个 JSON 文件，新版本可能写入了旧版本不认识的字段。当前版本（0.1.0）是首个版本，还没有升级路径问题；未来版本升级时，本文档会补充"元数据兼容性"说明。**在不确定的情况下，先只回滚二进制**（旧版本通常能容忍 JSON 里的未知字段，因为 `state.json` 的解析不启用未知字段拒绝；但 `config.ini` 是严格拒绝未知键的，回滚时要确认新版本没往它里面写过新键）。
+> **重要**：回滚二进制是安全的，但**回滚数据要慎重**。HomeVault 的元数据是单个 JSON 文件，新版本可能写入了旧版本不认识的字段。当前版本（0.1.1）是首个版本，还没有升级路径问题；未来版本升级时，本文档会补充"元数据兼容性"说明。**在不确定的情况下，先只回滚二进制**（旧版本通常能容忍 JSON 里的未知字段，因为 `state.json` 的解析不启用未知字段拒绝；但 `config.ini` 是严格拒绝未知键的，回滚时要确认新版本没往它里面写过新键）。
 
 ### 3.5 关于配置文件与运行期设置的兼容性
 
