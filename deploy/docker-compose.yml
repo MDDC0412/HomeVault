@@ -74,6 +74,16 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.full
+      args:
+        # 容器内运行用户的 UID/GID。宿主机上若 10001 已被占用，改这里即可，
+        # 不需要再去改 Dockerfile（改了会在 git pull 时冲突）。
+        # 建议与宿主机数据目录的属主保持一致：
+        #   sudo chown -R 18090:18090 ./data-full
+        APP_UID: ${APP_UID:-10001}
+        APP_GID: ${APP_GID:-10001}
+        # Debian 软件源镜像。默认阿里云，国内构建不会超时。
+        # 海外构建可改成：APT_MIRROR: deb.debian.org
+        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
     image: homevault:full
     container_name: homevault-full
     profiles: ["full"]

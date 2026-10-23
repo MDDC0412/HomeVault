@@ -54,6 +54,15 @@ FROM debian:stable-slim
 ARG APP_UID=10001
 ARG APP_GID=10001
 
+# ---------------------------------------------------------------------------
+# Debian 软件源镜像。默认用阿里云，国内构建不会卡在 deb.debian.org 上超时。
+# 海外构建或想换源时，构建时覆盖即可：
+#
+#   --build-arg APT_MIRROR=deb.debian.org
+#   --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+# ---------------------------------------------------------------------------
+ARG APT_MIRROR=mirrors.aliyun.com
+
 # 一次性装完并清理 apt 缓存，避免层里残留 /var/lib/apt/lists。
 #
 #   libreoffice-writer   .doc / .docx / .odt / .rtf
@@ -66,17 +75,28 @@ ARG APP_GID=10001
 #
 # 装完之后 `soffice` 会出现在 /usr/bin/soffice，homevault 自动探测得到。
 # 显式指定时用的是 HOMEVAULT_SOFFICE（见 internal/core/preview.go 的 sofficeBinary）。
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      tzdata \
-      libreoffice-writer \
-      libreoffice-calc \
-      libreoffice-impress \
-      fonts-noto-cjk \
- && rm -rf /var/lib/apt/lists/* \
- && groupadd -g "${APP_GID}" homevault \
- && useradd -u "${APP_UID}" -g "${APP_GID}" -M -s /usr/sbin/nologin homevault
+RUN set -eux; \
+    if [ "${APT_MIRROR}" != "deb.debian.org" ]; then \
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" \
+                /etc/apt/sources.list.d/debian.sources; \
+        fi; \
+        if [ -f /etc/apt/sources.list ]; then \
+            sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" \
+                /etc/apt/sources.list; \
+        fi; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        tzdata \
+        libreoffice-writer \
+        libreoffice-calc \
+        libreoffice-impress \
+        fonts-noto-cjk; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd -g "${APP_GID}" homevault; \
+    useradd -u "${APP_UID}" -g "${APP_GID}" -M -s /usr/sbin/nologin homevault
 
 # 引导配置（与 lite 版一致）。
 RUN printf '%s\n' \
