@@ -1,5 +1,10 @@
 # HomeVault
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#16-许可证与致谢)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#5-运行环境)
+
 **一个单文件、零第三方依赖、开箱即用的自建网盘。** `go build` 出一个二进制就能跑，不需要数据库、不需要 Node、不需要前端构建，也不要配置文件才能启动。
 
 ```bash
@@ -936,9 +941,34 @@ netstat -ano | findstr :8080
 
 ### 许可证
 
-当前版本尚未添加正式的开源许可证文件。在选定并添加许可证之前，本项目按**保留所有权利**处理；如需在其它项目中复用其中的代码，请先联系作者获得授权。
+本项目以 **GNU General Public License v3.0（GPL-3.0）** 发布。完整条款见仓库根目录的 [`LICENSE`](LICENSE) 文件。
 
-> 一旦确定采用某个开源许可证（例如 MIT、Apache-2.0 或 GPL-3.0），会在此处明确标注，并在仓库根目录添加对应的 `LICENSE` 文件。
+```
+Copyright (C) 2026 MDDC0412
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+```
+
+**简单说**：
+
+| 你可以 | 你需要 |
+| --- | --- |
+| 自由使用、修改、分发本项目（包括商用） | 分发时附带许可证全文并公开源码 |
+| 把它部署在自己的服务器上，不需要公开任何东西 | 修改后的版本若对外分发，也要以 GPL-3.0 授权 |
+| 基于它做自己的项目 | 保留版权声明与免责声明，且不为原作者提供担保 |
+
+> **只在内部使用（比如部署给自己和家人用）不触发任何开源义务。** GPL 的约束从"对外分发"开始。
 
 ### 第三方组件
 
@@ -949,6 +979,7 @@ netstat -ano | findstr :8080
 ### 致谢
 
 - **Go 团队**：标准库的成熟度让"零依赖"这个选择成为可能——`net/http`、`embed`、`crypto` 基本覆盖了自建网盘的全部需要。
+- **自由软件基金会**：GPL-3.0 许可证文本与它所代表的软件自由理念。
 - **所有使用并反馈问题的用户**：真实使用场景里的问题反馈是这个项目还能继续改进的唯一原因。
 
 ---
