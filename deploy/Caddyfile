@@ -1,0 +1,67 @@
+# =============================================================================
+# litedrive 反向代理 —— Caddy
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Caddy 的两个天然优势：
+#   1. 自动 HTTPS：自动申请、自动续期、自动做 HTTP→HTTPS 跳转，不需要手写 TLS。
+#   2. reverse_proxy 默认就是**流式转发**，不会先把请求体缓冲到磁盘，
+#      所以不像 Nginx 那样必须显式关掉 request buffering。
+#
+# 改完记得在 litedrive 管理页面打开「信任反向代理」，
+# 否则审计日志里记录的客户端 IP 会是 Caddy 的地址。
+# =============================================================================
+
+drive.example.com {
+	# 静态资源压缩。/api/ 的响应都很小，压缩对上传/下载没有影响。
+	encode zstd gzip
+
+	# 自动申请证书、自动续期、自动跳转 HTTPS —— 都靠这一行。
+	reverse_proxy 127.0.0.1:8080 {
+		# 大文件上传/下载可能持续几十分钟，放宽读写超时。
+		transport http {
+			read_timeout 3600s
+			write_timeout 3600s
+			dial_timeout 10s
+		}
+
+		# 透传真实客户端信息。
+		# litedrive 只有在运行期设置 trustProxy 打开后才会采信这两个头，
+		# 没打开时用的是直连 IP（也就是 Caddy 的地址）。
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	# 不要缓存 /api/：这里的响应都带"当前状态"（目录列表、配额用量、
+	# 回收站、上传进度、审计日志），一旦被缓存，界面会显示过期数据。
+	@api path /api/*
+	header @api Cache-Control "no-store"
+
+	# 访问日志（可选）。Caddy 默认已经写日志，这里只是显式声明并轮转。
+	log {
+		output file /var/log/caddy/litedrive-access.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+
+	# 安全响应头。litedrive 自身已经下发 CSP（default-src 'self'），
+	# 这里补充几个 Caddy 层面更适合设置的。
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
+# -----------------------------------------------------------------------------
+# 内网 / 无域名场景：用自签证书或纯 HTTP。
+# 注意纯 HTTP 下登录 Cookie 不带 Secure 标记，只适合完全可信的内网。
+# -----------------------------------------------------------------------------
+# :8080 {
+# 	reverse_proxy 127.0.0.1:8081
+# }

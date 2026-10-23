@@ -1,0 +1,114 @@
+# =============================================================================
+# homevault systemd 单元文件
+#
+# 安装步骤（完整版，逐条可复制）：
+#
+#   # 1) 专用系统用户（无登录 shell、无 home）
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin homevault
+#
+#   # 2) 安装二进制
+#   sudo install -m 0755 -o root -g root homevault /usr/local/bin/homevault
+#
+#   # 3) 目录
+#   sudo mkdir -p /etc/homevault
+#   sudo mkdir -p /var/lib/homevault/HomeVaultSpace
+#
+#   # 4) 属主与权限：配置目录 root 只读，空间目录归 homevault（服务要写）
+#   sudo chown -R root:root /etc/homevault
+#   sudo chown -R homevault:homevault /var/lib/homevault
+#   sudo chmod 0750 /etc/homevault /var/lib/homevault
+#
+#   # 5) 配置（space_dir 必须绝对路径，且必须在 homevault 可写范围内）
+#   sudo tee /etc/homevault/config.ini >/dev/null <<'EOF'
+#   listen = "127.0.0.1:8080"
+#   space_dir = "/var/lib/homevault/HomeVaultSpace"
+#   tls_cert = ""
+#   tls_key = ""
+#   admin_user = "admin"
+#   admin_password = "改成你自己的强密码"
+#   EOF
+#   sudo chown root:root /etc/homevault/config.ini
+#   sudo chmod 0600 /etc/homevault/config.ini
+#
+#   # 6) 安装单元文件
+#   sudo install -m 0644 deploy/homevault.service /etc/systemd/system/homevault.service
+#
+#   # 7) 启用
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now homevault
+#   sudo systemctl status homevault
+#   sudo journalctl -u homevault -f
+#
+# 首次启动后浏览器打开 http://<主机>:8080/admin/，用 admin / admin 登录并
+# 立刻修改账号或密码（在改之前其他接口一律返回 403 must_change_credentials）。
+# =============================================================================
+
+[Unit]
+Description=homevault 轻量自建网盘
+Documentation=https://github.com/your-org/homevault
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 绝不 root 运行
+User=homevault
+Group=homevault
+
+# config.ini 用绝对路径给出；WorkingDirectory 只是给相对路径兜底
+WorkingDirectory=/var/lib/homevault
+ExecStart=/usr/local/bin/homevault serve -config /etc/homevault/config.ini
+
+# 崩溃自动重启；正常退出（systemctl stop 走的优雅退出）不重启
+Restart=on-failure
+RestartSec=3
+
+# ---------------------------------------------------------------------------
+# 加固
+# ---------------------------------------------------------------------------
+NoNewPrivileges=true
+
+# 独立的 /tmp 与 /var/tmp，看不到宿主机的临时文件
+PrivateTmp=true
+
+# 整个文件系统只读，只有下面 ReadWritePaths 里的路径可写
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/homevault
+
+# 不允许碰内核参数、cgroup、内核模块
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+
+# 只允许必要的协议族（HTTP 监听与本地 DNS 解析够用）
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# systemd 预设的"服务类"系统调用白名单
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# 大文件并发上传/下载需要较多文件描述符
+LimitNOFILE=65535
+
+# 日志走 journald（不需要在 config.ini 里配日志文件路径）
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homevault
+
+# ---------------------------------------------------------------------------
+# 可选：Office 预览
+# 系统包里装了 LibreOffice 时会被自动探测到（探测 soffice / libreoffice，
+# 以及 Windows 下的标准安装路径）。装在非标准位置时用下面这行指定：
+# ---------------------------------------------------------------------------
+# Environment=HOMEVAULT_SOFFICE=/opt/libreoffice/program/soffice
+
+# ---------------------------------------------------------------------------
+# 可选：调整日志级别（或者用 `systemctl edit homevault` 做覆盖，避免改本文件）
+# ---------------------------------------------------------------------------
+# ExecStart=
+# ExecStart=/usr/local/bin/homevault serve -config /etc/homevault/config.ini -log-level debug
+
+[Install]
+WantedBy=multi-user.target

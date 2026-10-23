@@ -1,0 +1,80 @@
+# =============================================================================
+# litedrive .gitignore
+# =============================================================================
+
+# ---- 构建产物 ----
+# build.ps1 的输出目录
+dist/
+# 直接在仓库根目录 go build 出来的二进制
+/litedrive
+/litedrive.exe
+*.exe
+*.dll
+*.so
+*.dylib
+# Go 的测试与覆盖率产物
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# ---- 运行时数据 ----
+# 引导配置：每台机器都不一样，而且可能含明文管理员密码，**绝不能提交**
+config.ini
+config.local.ini
+*.ini.bak
+
+# 空间目录：用户文件、回收站、审计日志、分片、缓存、state.json
+# 默认空间目录名（Windows: C:\HomeVaultSpace，Linux: /root/HomeVaultSpace）
+HomeVaultSpace/
+# 仓库内直接放数据的常见位置
+data/
+data-*/
+/storage/
+/files/
+/uploads/
+/trash/
+/audit/
+/cache/
+state.json
+*.jsonl
+
+# 容器/部署产物
+.env
+.env.local
+docker-compose.override.yml
+deploy/data/
+deploy/data-full/
+
+# TLS 私钥与证书（只提交示例时也要小心）
+*.pem
+*.key
+*.crt
+*.pfx
+!deploy/**/*.example
+
+# ---- 开发环境 ----
+# 自定义的 Go 缓存/工作目录（换机器时可删）
+.gocache/
+.gopath/
+.gotmp/
+# 编辑器与系统
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+# 临时文件
+*.log
+*.tmp
+*.bak
+
+# ---- 发布产物 ----
+# 打包好的平台二进制走 GitHub Releases 分发，不进仓库（避免仓库被几十 MB 二进制撑大）。
+# 本地生成的 HomeVaultRelease/ 目录保留，但不提交。
+/HomeVaultRelease/
+dist/

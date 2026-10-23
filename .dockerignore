@@ -1,0 +1,79 @@
+# =============================================================================
+# litedrive .dockerignore
+#
+# 构建上下文是**仓库根目录**（Dockerfile 需要 go.mod / main.go / internal/ / web/）。
+# 这里排除的是"构建用不到、传过去只会拖慢构建、甚至误带进镜像"的东西。
+#
+# 注意：**不能**排除 web/ —— 它是 //go:embed all:web 的内嵌前端，少了它编译不过。
+# 也**不能**排除 go.mod（即使模块没有任何第三方依赖，编译也需要它声明 module 名）。
+# =============================================================================
+
+# ---- 版本控制 ----
+.git/
+.gitignore
+.gitattributes
+
+# ---- 构建产物（镜像里是从源码重新编译的，不需要旧的二进制）----
+dist/
+litedrive
+litedrive.exe
+*.exe
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# ---- 运行时数据 ----
+# 引导配置（可能含明文管理员密码）
+config.ini
+config.local.ini
+*.ini.bak
+# 空间目录：用户文件、回收站、审计日志、分片、缓存、元数据
+HomeVaultSpace/
+data/
+data-*/
+storage/
+state.json
+*.jsonl
+
+# ---- 容器部署产物 ----
+.env
+.env.local
+docker-compose.override.yml
+deploy/data/
+deploy/data-full/
+
+# ---- 证书与私钥 ----
+*.pem
+*.key
+*.crt
+*.pfx
+
+# ---- Go 缓存与工作目录（构建阶段在镜像内部重新拉取/编译）----
+# 本模块没有第三方依赖，构建阶段不需要任何缓存目录
+.gocache/
+.gopath/
+.gotmp/
+go.work
+go.work.sum
+vendor/
+
+# ---- 编辑器与系统 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 文档（运行时用不到；Dockerfile 也不 COPY 它们，这里再排除一层减少上下文）----
+*.md
+docs/
+!README.md
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+*.bak

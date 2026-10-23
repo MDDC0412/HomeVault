@@ -1,0 +1,88 @@
+# =============================================================================
+# litedrive 精简版镜像（约 25–40 MB）
+#
+#   docker build -f deploy/Dockerfile.lite -t litedrive:lite .
+#   docker run -d --name litedrive -p 127.0.0.1:8080:8080 \
+#     -v "$PWD/data:/data" --restart unless-stopped litedrive:lite
+#
+# 特点：只有 litedrive 本体。Word/Excel/PPT 这类文件不会做服务端转换，
+#       前端会退化为"提示下载查看"（接口返回 409 office_preview_unavailable）。
+#       需要服务端 Office→PDF 预览请改用 deploy/Dockerfile.full。
+#
+# 注意：构建上下文是**仓库根目录**（不是 deploy/），因为需要 go.mod / main.go /
+#       internal/ / web/。如果你在 deploy/ 目录里执行 docker build，请改成
+#       `docker build -f Dockerfile.lite -t litedrive:lite ..`
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 阶段 1：构建
+# go.mod 声明的是 `go 1.24`，这里用 1.25-alpine（更新的 1.25+ 均可）。
+# 本模块**没有任何第三方依赖**，因此不需要 go mod download，也不需要 vendor。
+# ---------------------------------------------------------------------------
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+
+# 先只拷贝依赖清单：本项目无第三方依赖，这一步几乎瞬间完成并命中缓存。
+# （保留这一步是为了将来引入依赖时构建仍然高效。）
+COPY go.mod ./
+
+# 拷贝源码。web/ 是 //go:embed all:web 的内嵌前端，必须一起带上。
+COPY main.go ./
+COPY internal/ ./internal/
+COPY web/ ./web/
+
+# 静态编译：CGO_ENABLED=0 让产物不依赖 libc，可以放进 alpine 或 distroless。
+# -trimpath 去掉构建机路径，-s -w 去掉符号表与调试信息（体积能小 25% 左右）。
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath \
+      -ldflags "-s -w" \
+      -o /out/litedrive .
+
+# ---------------------------------------------------------------------------
+# 阶段 2：运行
+# alpine 自带 BusyBox（有 sh / wget，方便 exec 进去排障与写探活脚本）。
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+# ca-certificates：进程需要访问外网时（例如将来做 WebDAV 客户端）用得上。
+# tzdata：审计日志按天分文件、日志时间显示都依赖时区数据库。
+# 不装 LibreOffice —— 需要 Office 预览请用 Dockerfile.full。
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -g 10001 -S litedrive \
+ && adduser  -u 10001 -S -D -H -G litedrive litedrive
+
+# 引导配置：只写"改了就换进程形态"的必须项。
+#   listen      监听 0.0.0.0:8080（容器里必须监听 0.0.0.0，否则端口映射不通）
+#   space_dir   /data/HomeVaultSpace —— 落在数据卷上，容器重建不丢数据
+# 其余参数（配额、限速、保留期、分片大小、Office 预览模式……）都在管理页面里改，
+# 存在 <space_dir>/state.json，改完立即生效，不需要重建镜像。
+RUN printf '%s\n' \
+      '# litedrive 引导配置（容器内）' \
+      'listen = "0.0.0.0:8080"' \
+      'space_dir = "/data/HomeVaultSpace"' \
+      '# 内置 HTTPS 与反向代理二选一；容器场景推荐由外层反代终结 TLS。' \
+      'tls_cert = ""' \
+      'tls_key = ""' \
+      '# 只在首次启动（/data 里还没有 state.json）时读取。登录后会强制要求改账号或密码。' \
+      'admin_user = "admin"' \
+      'admin_password = "admin"' \
+      > /data/config.ini \
+ && chown 10001:10001 /data /data/config.ini \
+ && chmod 0600 /data/config.ini
+
+# 数据卷与工作目录：config.ini 的默认位置就是 WORKDIR，
+# 所以 `-config /data/config.ini` 其实等价于在 /data 下直接跑。
+VOLUME ["/data"]
+WORKDIR /data
+
+EXPOSE 8080
+
+COPY --from=build /out/litedrive /litedrive
+RUN chmod 0755 /litedrive
+
+USER 10001:10001
+
+# 用 exec 形式（不是 shell 形式），保证 litedrive 是 PID 1，
+# 能直接收到 docker stop 的 SIGTERM 并优雅退出（保存 state.json）。
+ENTRYPOINT ["/litedrive", "serve", "-config", "/data/config.ini"]

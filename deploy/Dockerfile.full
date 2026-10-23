@@ -1,0 +1,102 @@
+# =============================================================================
+# litedrive 完整版镜像（约 700 MB – 1 GB）
+#
+#   docker build -f deploy/Dockerfile.full -t litedrive:full .
+#   docker run -d --name litedrive-full -p 127.0.0.1:8081:8080 \
+#     -v "$PWD/data-full:/data" --restart unless-stopped litedrive:full
+#
+# 与 Dockerfile.lite 的唯一区别：运行阶段基于 debian，并装了 LibreOffice
+# （Writer / Calc / Impress）与中文字体，用来在服务端把 Word/Excel/PPT/ODF
+# 转成 PDF 做预览。
+#
+# 体积说明：debian:stable-slim 约 75 MB，LibreOffice 三个组件 + 依赖约
+# 600–900 MB，中文字体约 30–80 MB。镜像最终在 700 MB–1 GB 之间，
+# 这是"能在服务端预览 Office"的必然代价。只需要看图/PDF/文本/音视频的话，
+# 请用 Dockerfile.lite（25–40 MB）。
+#
+# 构建上下文是**仓库根目录**。
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 阶段 1：构建（与 lite 版完全一致）
+# go.mod 声明 `go 1.24`，这里用 1.25-alpine。
+# ---------------------------------------------------------------------------
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+
+COPY go.mod ./
+COPY main.go ./
+COPY internal/ ./internal/
+COPY web/ ./web/
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath \
+      -ldflags "-s -w" \
+      -o /out/litedrive .
+
+# ---------------------------------------------------------------------------
+# 阶段 2：运行（debian + LibreOffice）
+# ---------------------------------------------------------------------------
+FROM debian:stable-slim
+
+# 一次性装完并清理 apt 缓存，避免层里残留 /var/lib/apt/lists。
+#
+#   libreoffice-writer   .doc / .docx / .odt / .rtf
+#   libreoffice-calc     .xls / .xlsx / .ods
+#   libreoffice-impress  .ppt / .pptx / .odp
+#   fonts-noto-cjk       中文字体；不装的话中文会显示成方块
+#
+# --no-install-recommends 很关键：不加的话 libreoffice 的推荐包会把
+# 一堆 GUI 相关的组件拉进来，体积再涨几百 MB。
+#
+# 装完之后 `soffice` 会出现在 /usr/bin/soffice，litedrive 自动探测得到，
+# 不需要额外配置 LITEDRIVE_SOFFICE。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      tzdata \
+      libreoffice-writer \
+      libreoffice-calc \
+      libreoffice-impress \
+      fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 10001 litedrive \
+ && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin litedrive
+
+# 引导配置（与 lite 版一致）。
+RUN printf '%s\n' \
+      '# litedrive 引导配置（容器内）' \
+      'listen = "0.0.0.0:8080"' \
+      'space_dir = "/data/HomeVaultSpace"' \
+      '# 内置 HTTPS 与反向代理二选一；容器场景推荐由外层反代终结 TLS。' \
+      'tls_cert = ""' \
+      'tls_key = ""' \
+      '# 只在首次启动（/data 里还没有 state.json）时读取。登录后会强制要求改账号或密码。' \
+      'admin_user = "admin"' \
+      'admin_password = "admin"' \
+      > /data/config.ini \
+ && chown 10001:10001 /data /data/config.ini \
+ && chmod 0600 /data/config.ini
+
+# LibreOffice 首次运行需要可写的 HOME（会生成用户配置目录）。
+# 给它 /data 下的子目录，随数据卷一起持久化，避免每次启动重新初始化（首次转换能快几秒）。
+RUN mkdir -p /data/.libreoffice \
+ && chown 10001:10001 /data/.libreoffice
+
+ENV HOME=/data \
+    LITEDRIVE_SOFFICE=/usr/bin/soffice \
+    SAL_USE_VCLPLUGIN=svp \
+    SAL_DISABLE_OPENCL=1
+
+VOLUME ["/data"]
+WORKDIR /data
+
+EXPOSE 8080
+
+COPY --from=build /out/litedrive /litedrive
+RUN chmod 0755 /litedrive
+
+USER 10001:10001
+
+ENTRYPOINT ["/litedrive", "serve", "-config", "/data/config.ini"]
