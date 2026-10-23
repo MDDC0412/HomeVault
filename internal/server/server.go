@@ -164,16 +164,41 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 	})
 }
 
+// 预览类接口需要用 <iframe> 内嵌到页面里：
+//
+//	/api/preview/office   Office 转成的 PDF
+//	/api/fs/download      PDF / 图片 / 音视频的 inline 展示
+//
+// 因此这些路径必须放行同源嵌入；其余页面保持 DENY / frame-ancestors 'none'，
+// 避免整个站点被第三方站点套框（点击劫持）。
+func isFrameablePreviewPath(p string) bool {
+	switch p {
+	case "/api/preview", "/api/preview/office", "/api/fs/download":
+		return true
+	}
+	return false
+}
+
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
+		if isFrameablePreviewPath(r.URL.Path) {
+			// SAMEORIGIN 而不是 DENY：预览要能被本站的 iframe 加载。
+			// CSP 的 frame-ancestors 用 'self' 与之对齐（两者都是"只允许同源"）。
+			h.Set("X-Frame-Options", "SAMEORIGIN")
+			h.Set("Content-Security-Policy",
+				"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "+
+					"style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "+
+					"object-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'")
+		} else {
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Content-Security-Policy",
+				"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "+
+					"style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "+
+					"object-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		}
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "+
-				"style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "+
-				"object-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }

@@ -40,6 +40,20 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # ---------------------------------------------------------------------------
 FROM debian:stable-slim
 
+# ---------------------------------------------------------------------------
+# 运行用户的 UID / GID，可在构建时覆盖：
+#
+#   docker build -f deploy/Dockerfile.full \
+#     --build-arg APP_UID=18090 --build-arg APP_GID=18090 -t homevault:full .
+#
+# 如果宿主机上 10001 已经被别的服务占用（或者你希望容器的 UID 与宿主机上
+# 某个已有用户对齐，好让数据卷的属主天然一致），就用上面这种方式改。
+#
+# 也可以在 docker-compose.yml 的 build.args 里配置，见该文件的注释。
+# ---------------------------------------------------------------------------
+ARG APP_UID=10001
+ARG APP_GID=10001
+
 # 一次性装完并清理 apt 缓存，避免层里残留 /var/lib/apt/lists。
 #
 #   libreoffice-writer   .doc / .docx / .odt / .rtf
@@ -50,8 +64,8 @@ FROM debian:stable-slim
 # --no-install-recommends 很关键：不加的话 libreoffice 的推荐包会把
 # 一堆 GUI 相关的组件拉进来，体积再涨几百 MB。
 #
-# 装完之后 `soffice` 会出现在 /usr/bin/soffice，litedrive 自动探测得到，
-# 不需要额外配置 LITEDRIVE_SOFFICE。
+# 装完之后 `soffice` 会出现在 /usr/bin/soffice，homevault 自动探测得到。
+# 显式指定时用的是 HOMEVAULT_SOFFICE（见 internal/core/preview.go 的 sofficeBinary）。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -61,8 +75,8 @@ RUN apt-get update \
       libreoffice-impress \
       fonts-noto-cjk \
  && rm -rf /var/lib/apt/lists/* \
- && groupadd -g 10001 litedrive \
- && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin litedrive
+ && groupadd -g "${APP_GID}" homevault \
+ && useradd -u "${APP_UID}" -g "${APP_GID}" -M -s /usr/sbin/nologin homevault
 
 # 引导配置（与 lite 版一致）。
 RUN printf '%s\n' \
@@ -76,16 +90,16 @@ RUN printf '%s\n' \
       'admin_user = "admin"' \
       'admin_password = "admin"' \
       > /data/config.ini \
- && chown 10001:10001 /data /data/config.ini \
+ && chown "${APP_UID}:${APP_GID}" /data /data/config.ini \
  && chmod 0600 /data/config.ini
 
 # LibreOffice 首次运行需要可写的 HOME（会生成用户配置目录）。
 # 给它 /data 下的子目录，随数据卷一起持久化，避免每次启动重新初始化（首次转换能快几秒）。
 RUN mkdir -p /data/.libreoffice \
- && chown 10001:10001 /data/.libreoffice
+ && chown "${APP_UID}:${APP_GID}" /data/.libreoffice
 
 ENV HOME=/data \
-    LITEDRIVE_SOFFICE=/usr/bin/soffice \
+    HOMEVAULT_SOFFICE=/usr/bin/soffice \
     SAL_USE_VCLPLUGIN=svp \
     SAL_DISABLE_OPENCL=1
 
@@ -97,6 +111,6 @@ EXPOSE 8080
 COPY --from=build /out/litedrive /litedrive
 RUN chmod 0755 /litedrive
 
-USER 10001:10001
+USER ${APP_UID}:${APP_GID}
 
 ENTRYPOINT ["/litedrive", "serve", "-config", "/data/config.ini"]

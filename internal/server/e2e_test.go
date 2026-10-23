@@ -151,7 +151,7 @@ func (e *env) do(method, path string, body any, headers map[string]string) resp 
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(res.Body)
-	return resp{status: res.StatusCode, body: raw}
+	return resp{status: res.StatusCode, body: raw, header: res.Header}
 }
 
 func (e *env) json(method, path string, body any) resp {

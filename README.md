@@ -854,6 +854,20 @@ netstat -ano | findstr :8080
 
 **说明**：窗口宽度小于 860px 时自动切换移动布局（底部标签栏 + 卡片列表 + 底部抽屉弹窗）。桌面浏览器窗口拖得很窄也会触发，属于预期行为。
 
+### Office / PDF / 图片预览显示"拒绝连接"或被浏览器拦截
+
+**原因**：预览是通过 `<iframe>` 加载的，如果响应头禁止嵌入，浏览器会直接拒绝渲染。
+
+服务端对预览类接口（`/api/preview`、`/api/preview/office`、`/api/fs/download`）返回 `X-Frame-Options: SAMEORIGIN`，允许本站内嵌；其他页面返回 `DENY` 防点击劫持。
+
+**排查顺序**：
+
+1. **先确认是不是端口写错了。** 浏览器里访问 `http://IP` 默认走 80 端口，而服务默认监听 8080（Docker 场景常映射到别的端口，如 18090）。用 `http://IP:端口` 访问。
+2. 换一个浏览器或无痕窗口，排除扩展拦截（广告拦截类插件会拦 iframe）。
+3. 确认前面没有额外的反向代理覆盖这两个响应头。Nginx 里如果配了 `add_header X-Frame-Options DENY;`，会与首页的 CSP 冲突，需要针对预览路径放开。
+
+**如果 Office 预览提示"服务端未安装 LibreOffice"**：说明当前是 lite 版镜像。Office 转 PDF 需要 full 版（内置 LibreOffice，镜像约 700 MB – 1 GB）。
+
 ---
 
 ## 14. 贡献与问题反馈
