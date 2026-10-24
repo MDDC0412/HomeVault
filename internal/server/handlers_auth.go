@@ -3,7 +3,10 @@ package server
 import (
 	"io/fs"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -294,10 +297,70 @@ func (s *Server) handleDisks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	// 物理盘概览失败不影响主流程：拿不到就返回空数组。
+	devices, _ := ListBlockDevices()
+	if devices == nil {
+		devices = []BlockDevice{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"disks":           disks,
+		"devices":         devices,
 		"currentSpaceDir": s.cfg.SpaceDir,
 		"defaultSpaceDir": defaultSpaceDirForAPI(),
+	})
+}
+
+// handleBrowseDirs 列出某个目录下的子目录（仅管理员，用于挑存储位置）。
+//
+// 刻意只返回目录名：这个接口的用途是"选一个落盘位置"，不是文件管理器，
+// 因此不返回文件名、大小或内容，也不跟随符号链接。
+func (s *Server) handleBrowseDirs(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimSpace(r.URL.Query().Get("path"))
+	if raw == "" {
+		raw = s.cfg.SpaceDir
+	}
+	if !filepath.IsAbs(raw) {
+		writeErr(w, http.StatusBadRequest, "invalid_path", "目录必须是绝对路径")
+		return
+	}
+	p := filepath.Clean(raw)
+	ents, err := os.ReadDir(p)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_path", "无法读取该目录："+err.Error())
+		return
+	}
+	type dirEntry struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	dirs := make([]dirEntry, 0, len(ents))
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// 隐藏目录（.git / .libreoffice / 快照目录）对"选存储位置"没有意义，跳过。
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		dirs = append(dirs, dirEntry{Name: name, Path: filepath.Join(p, name)})
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
+
+	parent := filepath.Dir(p)
+	if parent == p {
+		parent = "" // 已经在根目录
+	}
+	total, free, _ := DiskStats(p)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":     p,
+		"parent":   parent,
+		"dirs":     dirs,
+		"writable": writableDir(p),
+		"total":    total,
+		"free":     free,
+		"hasState": fileExists(filepath.Join(p, "state.json")),
+		"current":  p == s.cfg.SpaceDir,
 	})
 }
 

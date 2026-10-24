@@ -360,7 +360,13 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if nu.Root != "" {
 		if _, err := s.svc.FS.EnsureRoot(nu.Root); err != nil {
-			writeErr(w, http.StatusInternalServerError, "internal_error", "创建存储空间失败："+err.Error())
+			// 账号记录这时已经落盘了。不回滚就会留下一个"界面说失败、库里却有"的幽灵账号，
+			// 下次同名再建又会撞 already_exists，用户永远查不出原因。
+			_ = s.svc.State.DeleteUser(nu.Username)
+			s.svc.Audit(s.actor(r), audit.ActionUserCreate, nu.Username, audit.StatusDenied, 0,
+				"创建存储目录失败，账号已回滚："+err.Error())
+			writeErr(w, http.StatusInternalServerError, "internal_error",
+				"创建存储空间失败，账号未创建："+err.Error())
 			return
 		}
 	}
@@ -579,6 +585,13 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	if settings.SpaceDir != "" && settings.SpaceDir != s.cfg.SpaceDir {
 		restart = append(restart, "spaceDir")
 	}
+	if settings.Listen != "" && settings.Listen != s.cfg.Listen {
+		restart = append(restart, "listen")
+	}
+	if (settings.TLSCert != "" || settings.TLSKey != "") &&
+		(settings.TLSCert != s.cfg.TLSCert || settings.TLSKey != s.cfg.TLSKey) {
+		restart = append(restart, "tls")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings":        settings,
 		"restartRequired": restart,
@@ -588,6 +601,8 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 			"spaceDir":        s.cfg.SpaceDir,
 			"defaultSpaceDir": config.DefaultSpaceDir(),
 			"tlsEnabled":      s.cfg.TLSEnabled(),
+			"tlsCert":         s.cfg.TLSCert,
+			"tlsKey":          s.cfg.TLSKey,
 			"officeAvailable": s.svc.OfficeAvailable(),
 			"version":         Version,
 			"permissionNames": state.UserPermissions,
@@ -597,6 +612,9 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 
 type settingsPatch struct {
 	SpaceDir          *string          `json:"spaceDir"`
+	Listen            *string          `json:"listen"`
+	TLSCert           *string          `json:"tlsCert"`
+	TLSKey            *string          `json:"tlsKey"`
 	SpaceQuota        *state.SizeValue `json:"spaceQuota"`
 	DefaultQuota      *state.SizeValue `json:"defaultQuota"`
 	DefaultRateLimit  *int             `json:"defaultRateLimitMbps"`
@@ -700,6 +718,76 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 			restart = append(restart, "spaceDir")
 		}
 	}
+	// 监听地址：写回 config.ini，重启后生效。
+	// Docker 场景下容器内端口必须与 compose 的映射右侧一致，界面会额外提示，
+	// 所以这里只负责"把用户的选择正确落盘 + 校验合法性"。
+	if req.Listen != nil {
+		want := strings.TrimSpace(*req.Listen)
+		if err := config.ValidateListen(want); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid_setting", err.Error())
+			return
+		}
+		if want == s.cfg.Listen {
+			next.Listen = "" // 改回当前值 = 撤销待生效项
+		} else {
+			if err := config.SetValue(s.cfg.Path, "listen", want); err != nil {
+				writeErr(w, http.StatusInternalServerError, "internal_error",
+					"写入配置文件失败："+err.Error())
+				return
+			}
+			next.Listen = want
+			restart = append(restart, "listen")
+		}
+	}
+
+	// TLS：证书与私钥必须同时存在或同时留空；非空时先确认文件真的可读，
+	// 否则重启后进程直接起不来，用户面对的是"改了设置，服务不见了"。
+	if req.TLSCert != nil || req.TLSKey != nil {
+		cert, key := s.cfg.TLSCert, s.cfg.TLSKey
+		if next.TLSCert != "" || next.TLSKey != "" {
+			cert, key = next.TLSCert, next.TLSKey
+		}
+		if req.TLSCert != nil {
+			cert = strings.TrimSpace(*req.TLSCert)
+		}
+		if req.TLSKey != nil {
+			key = strings.TrimSpace(*req.TLSKey)
+		}
+		if (cert == "") != (key == "") {
+			writeErr(w, http.StatusBadRequest, "invalid_setting", "TLS 证书与私钥必须同时填写或同时留空")
+			return
+		}
+		for _, f := range []string{cert, key} {
+			if f == "" {
+				continue
+			}
+			if !filepath.IsAbs(f) {
+				writeErr(w, http.StatusBadRequest, "invalid_setting", "证书路径必须是绝对路径："+f)
+				return
+			}
+			if _, statErr := os.Stat(f); statErr != nil {
+				writeErr(w, http.StatusBadRequest, "invalid_setting", "读取不到证书文件："+f)
+				return
+			}
+		}
+		if cert == s.cfg.TLSCert && key == s.cfg.TLSKey {
+			next.TLSCert, next.TLSKey = "", ""
+		} else {
+			if err := config.SetValue(s.cfg.Path, "tls_cert", cert); err != nil {
+				writeErr(w, http.StatusInternalServerError, "internal_error",
+					"写入配置文件失败："+err.Error())
+				return
+			}
+			if err := config.SetValue(s.cfg.Path, "tls_key", key); err != nil {
+				writeErr(w, http.StatusInternalServerError, "internal_error",
+					"写入配置文件失败："+err.Error())
+				return
+			}
+			next.TLSCert, next.TLSKey = cert, key
+			restart = append(restart, "tls")
+		}
+	}
+
 	if err := next.Validate(); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_setting", err.Error())
 		return

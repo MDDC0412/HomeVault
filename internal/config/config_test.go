@@ -55,7 +55,7 @@ func TestLoadMissingFileWritesTemplateAndUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("首次 Load 失败：%v", err)
 	}
-	if cfg.Listen != "0.0.0.0:8080" {
+	if cfg.Listen != config.DefaultListen {
 		t.Fatalf("默认 listen 不正确：%q", cfg.Listen)
 	}
 	if cfg.AdminUser != "admin" || cfg.AdminPassword != "admin" {

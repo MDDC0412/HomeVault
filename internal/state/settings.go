@@ -170,6 +170,11 @@ func FormatSize(n int64) string {
 type Settings struct {
 	// SpaceDir 为空表示沿用配置文件/系统默认值；非空时为**待生效**的新空间目录，需重启。
 	SpaceDir string `json:"spaceDir"`
+	// Listen / TLSCert / TLSKey 也是**待生效**的引导配置：管理页面改完会写回
+	// config.ini，重启后生效。为空表示与当前配置文件一致。
+	Listen  string `json:"listen,omitempty"`
+	TLSCert string `json:"tlsCert,omitempty"`
+	TLSKey  string `json:"tlsKey,omitempty"`
 	// SpaceQuota 是整个空间目录的总容量上限（所有用户 + 回收站 + 未提交分片之和）。
 	// 0 = 不限（等于"有多少磁盘用多少"），默认 5 GiB。
 	SpaceQuota        SizeValue `json:"spaceQuota"`

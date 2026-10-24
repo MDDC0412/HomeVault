@@ -20,7 +20,7 @@
 #
 #   # 5) 配置（space_dir 必须绝对路径，且必须在 homevault 可写范围内）
 #   sudo tee /etc/homevault/config.ini >/dev/null <<'EOF'
-#   listen = "127.0.0.1:8080"
+#   listen = "127.0.0.1:18090"
 #   space_dir = "/var/lib/homevault/HomeVaultSpace"
 #   tls_cert = ""
 #   tls_key = ""
@@ -39,7 +39,7 @@
 #   sudo systemctl status homevault
 #   sudo journalctl -u homevault -f
 #
-# 首次启动后浏览器打开 http://<主机>:8080/admin/，用 admin / admin 登录并
+# 首次启动后浏览器打开 http://<主机>:18090/admin/，用 admin / admin 登录并
 # 立刻修改账号或密码（在改之前其他接口一律返回 403 must_change_credentials）。
 # =============================================================================
 

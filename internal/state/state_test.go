@@ -681,3 +681,88 @@ func TestFormatSizeAndDuration(t *testing.T) {
 		t.Fatalf("0 时长格式化错误：%q", got)
 	}
 }
+
+// 数据安全：state.json 存在但为空时，绝不能当成"全新安装"静默继续——
+// 那样后续任何一次写入都会把用户和设置覆盖掉（线上事故就是这么丢的）。
+func TestOpenRejectsEmptyStateFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Open(path); err == nil {
+		t.Fatal("空 state.json 应报错，不能静默初始化为空库")
+	}
+	// 空白字符同样视为空文件。
+	if err := os.WriteFile(path, []byte("  \n\t "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Open(path); err == nil {
+		t.Fatal("仅含空白字符的 state.json 应报错")
+	}
+}
+
+func TestOpenRejectsCorruptStateFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte(`{"users": {"alice": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Open(path); err == nil {
+		t.Fatal("截断的 state.json 应报错")
+	}
+}
+
+// 主文件消失但还原点仍在：说明多半挂错了数据卷或误删，必须拦住而不是重建空库。
+func TestOpenRefusesFreshStartWhenBackupExists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	bak := state.BackupPath(path)
+	if err := os.WriteFile(bak, []byte(`{"version":1,"users":{},"trash":{},"uploads":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Open(path); err == nil {
+		t.Fatal("存在还原点时不应把缺失的 state.json 当成首次运行")
+	}
+	// 主文件与还原点都不在，才是真正的首次运行。
+	if err := os.Remove(bak); err != nil {
+		t.Fatal(err)
+	}
+	st, err := state.Open(path)
+	if err != nil {
+		t.Fatalf("首次运行应成功：%v", err)
+	}
+	if n := st.UserCount(); n != 0 {
+		t.Fatalf("新库用户数应为 0，实际 %d", n)
+	}
+}
+
+// 每次成功加载都要留下还原点，且还原点内容与加载前一致（不被归一化改写）。
+func TestOpenWritesRestorePoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	st, err := state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutUser(&state.User{
+		Username: "alice", Root: "alice", PasswordHash: "pbkdf2-sha256$1$AA$BB",
+		Permissions: map[string]bool{state.PermRead: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Open(path); err != nil {
+		t.Fatalf("重新打开失败：%v", err)
+	}
+	bak, err := os.ReadFile(state.BackupPath(path))
+	if err != nil {
+		t.Fatalf("应写出还原点：%v", err)
+	}
+	if string(bak) != string(before) {
+		t.Fatal("还原点内容应与加载时读到的文件完全一致")
+	}
+}

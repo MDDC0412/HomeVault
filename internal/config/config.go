@@ -11,9 +11,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -43,10 +45,16 @@ func DefaultSpaceDir() string {
 	return "/root/HomeVaultSpace"
 }
 
+// DefaultListen 是内置默认监听地址。
+//
+// 刻意不用 8080/8081：这两个是最容易被别的程序先占住的端口，
+// 自托管场景下换成 18090 能省掉一轮"拒绝连接"的排查。
+const DefaultListen = "0.0.0.0:18090"
+
 // Default 返回内置默认配置。
 func Default() *Config {
 	return &Config{
-		Listen:        "0.0.0.0:8080",
+		Listen:        DefaultListen,
 		SpaceDir:      DefaultSpaceDir(),
 		AdminUser:     "admin",
 		AdminPassword: "admin",
@@ -59,8 +67,8 @@ const Template = `# homevault 引导配置
 # 这里只放"改了就换进程形态"的必须项。
 # 含 # 的值请用双引号包起来。改完需要重启进程。
 
-# HTTP 监听地址。放在反向代理后面时建议改成 127.0.0.1:8080。
-listen = "0.0.0.0:8080"
+# HTTP 监听地址。放在反向代理后面时建议改成 127.0.0.1:18090。
+listen = "0.0.0.0:18090"
 
 # 空间目录：用户文件、回收站、审计日志、上传分片、缓存与元数据都在其中。
 # 目录整体可搬迁：换盘时改这里 + 执行 homevault migrate-space。
@@ -211,6 +219,30 @@ func (c *Config) Validate() error {
 
 // TLSEnabled 表示是否启用内置 HTTPS。
 func (c *Config) TLSEnabled() bool { return c.TLSCert != "" && c.TLSKey != "" }
+
+// ValidateListen 校验 "host:port" 形式的监听地址。
+//
+// 只用于"从管理页面改端口"这条路径：启动时 Load 仍保持宽松，
+// 避免因为一行写歪的配置把已经跑起来的服务锁死在启动失败上。
+func ValidateListen(v string) error {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return errors.New("监听地址不能为空")
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return fmt.Errorf("监听地址应形如 0.0.0.0:18090（%v）", err)
+	}
+	if host != "" && host != "localhost" && net.ParseIP(host) == nil {
+		return fmt.Errorf("监听地址的主机部分 %q 不是合法 IP（要监听全部网卡请写 0.0.0.0）", host)
+	}
+	n, convErr := strconv.Atoi(port)
+	// 0 是合法值：交给内核随机分配端口（测试和临时实例会用）。
+	if convErr != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("端口 %q 不是 0-65535 之间的整数（0 = 由系统随机分配）", port)
+	}
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // 空间目录布局

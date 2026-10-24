@@ -5,7 +5,7 @@
 HomeVault 的部署特点：
 
 - **单二进制、零依赖**：`CGO_ENABLED=0` 静态编译，不需要运行时、不需要 Node、不需要数据库。
-- **零配置启动**：不带配置文件也能起来（监听 `0.0.0.0:8080`，空间目录用系统默认）。生产环境建议显式写 `config.ini`。
+- **零配置启动**：不带配置文件也能起来（监听 `0.0.0.0:18090`，空间目录用系统默认）。生产环境建议显式写 `config.ini`。
 - **只有 6 项引导配置**：其余参数在管理页面里改。
 - **前端已内嵌进二进制**（`//go:embed all:web`），不需要额外的静态目录或 CDN。
 
@@ -47,10 +47,10 @@ cd /var/lib/homevault
 控制台输出：
 
 ```
-  homevault 0.1.1 已启动
+  homevault 0.1.2 已启动
   ─────────────────────────────────────────────
-  用户端：  http://127.0.0.1:8080/
-  管理端：  http://127.0.0.1:8080/admin/
+  用户端：  http://127.0.0.1:18090/
+  管理端：  http://127.0.0.1:18090/admin/
   空间目录：/root/HomeVaultSpace
   配置文件：/var/lib/homevault/config.ini
   Office 预览：不可用（未检测到 LibreOffice，将退回内置预览）
@@ -59,7 +59,7 @@ cd /var/lib/homevault
   登录后必须修改账号或密码，否则无法使用其他功能。
 ```
 
-浏览器打开 `http://<主机>:8080/`，用 `admin` / `admin` 登录，界面会**强制**要求改账号或密码；在改之前，除"改凭据/登出/健康检查"外的接口一律返回 `403 must_change_credentials`。
+浏览器打开 `http://<主机>:18090/`，用 `admin` / `admin` 登录，界面会**强制**要求改账号或密码；在改之前，除"改凭据/登出/健康检查"外的接口一律返回 `403 must_change_credentials`。
 
 > 管理员登录后会被引导到**管理端 `/admin/`**（创建/禁用用户、选一个用户去管理他的文件、改运行期设置、看审计日志与磁盘用量）。
 > 用户端在 `/`。管理员**没有自己的存储空间**，所有文件操作都要先在管理端选中目标用户。
@@ -117,14 +117,14 @@ sudo chown -R 10001:10001 ./data      # 改成你构建时的 APP_UID:APP_GID
 
 # 精简版
 docker run -d --name homevault \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:18090:18090 \
   -v "$PWD/data:/data" \
   --restart unless-stopped \
   homevault:lite
 
 # 完整版（Office 预览）
 docker run -d --name homevault-full \
-  -p 127.0.0.1:8081:8080 \
+  -p 127.0.0.1:18090:18090 \
   -v "$PWD/data-full:/data" \
   --restart unless-stopped \
   homevault:full
@@ -138,7 +138,7 @@ docker run -d --name homevault-full \
 | 入口脚本 | `/docker-entrypoint.sh`（启动时检查并补齐 `config.ini`，见下） |
 | 空间目录 | `/data/HomeVaultSpace` |
 | 数据卷 | `VOLUME /data` |
-| 端口 | `EXPOSE 8080`（容器内**固定**监听 `0.0.0.0:8080`） |
+| 端口 | `EXPOSE 18090`（容器内**固定**监听 `0.0.0.0:18090`） |
 | 运行用户 | 非 root，默认 uid / gid 均为 `10001`，可用 `APP_UID`/`APP_GID` 改 |
 | 时区与证书 | `tzdata`（审计日志按天分文件、日志时间显示）+ `ca-certificates` |
 
@@ -150,10 +150,13 @@ docker run -d --name homevault-full \
 
 | 情况 | 行为 |
 | --- | --- |
-| `/data/config.ini` 不存在 | 生成一份容器场景正确的配置（`listen = 0.0.0.0:8080`、`space_dir = /data/HomeVaultSpace`） |
-| `/data/config.ini` 已存在 | **绝不覆盖**，保留你改过的端口、管理员账号等 |
+| `/data/config.ini` 不存在 | 生成一份容器场景正确的配置（`listen = 0.0.0.0:18090`、`space_dir = /data/HomeVaultSpace`）；数据卷里也没有 `state.json` 时额外打印大段告警 |
+| `/data/config.ini` 已存在 | **不覆盖内容**，保留你改过的 `space_dir`、管理员账号等 |
+| 已存在、但 `listen` 与 `HOMEVAULT_PORT` 不一致 | 只改 `listen` 这一行（映射端口是权威），并在日志里打印原值与新值 |
 
-所以想改容器内配置，直接编辑宿主机上的 `./data-full/config.ini` 然后重启容器即可，不会因为重建镜像丢失。脚本最后用 `exec` 启动主进程，`docker stop` 的 SIGTERM 能直达 homevault，正常保存 `state.json`。
+所以想改容器内的 `space_dir`，编辑宿主机上的 `./data-full/config.ini` 再重启容器即可；
+但 **`listen` 不要手改**——它会在每次启动时被 `HOMEVAULT_PORT` 对齐回去。
+脚本最后用 `exec` 启动主进程，`docker stop` 的 SIGTERM 能直达 homevault，正常保存 `state.json`。
 
 关于 `read_only: true`：**不要**给这个容器开只读根文件系统。HomeVault 整个空间目录（`files/`、`trash/`、`audit/`、`uploads/`、`cache/`、`state.json`）都在 `/data` 下持续写入，且管理页面改"存储位置"时会回写 `/data/config.ini`，一旦某处写不进去就会以 `500 internal_error` 暴露在界面上。**保持默认可写最省事**。
 
@@ -180,20 +183,22 @@ docker compose logs -f homevault-full
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `HOST_BIND` | `127.0.0.1` | 宿主机监听地址。局域网访问改 `0.0.0.0` |
-| `HOST_PORT` | `8080` / `8081` | 宿主机端口（浏览器访问用这个） |
+| `HOST_PORT` | `18090` | 宿主机端口（浏览器访问用这个） |
 | `APP_UID` / `APP_GID` | `10001` | 容器内运行用户，须与数据目录属主一致 |
 | `APT_MIRROR` | `mirrors.aliyun.com` | Debian 源，仅 full 版构建时用 |
 | `TZ` | `Asia/Shanghai` | 审计日志与界面时间 |
 
 数据落在 `deploy/data/` 与 `deploy/data-full/`（可在 compose 里改成绝对路径）。
 
-> ⚠️ **端口不要改错地方**：容器内始终监听 8080，对外端口由 `HOST_PORT` 决定。如果去改 `config.ini` 的 `listen`，映射就对不上，浏览器会报"拒绝连接"。
+> ⚠️ **端口只改一个地方**：容器内固定监听 18090，对外端口由 `HOST_PORT` 决定。
+> 入口脚本会用 `HOMEVAULT_PORT` 把 `config.ini` 的 `listen` 自动对齐，所以手改
+> `config.ini` 的 `listen` 是无效的（会被覆盖回来），也不会再造成"拒绝连接"。
 
 关于健康检查：镜像是最小根文件系统，**不带 `curl`**，所以 compose 里的 `healthcheck` 默认注释掉。三种可选做法：
 
 1. **不配健康检查**（默认），靠 `restart: unless-stopped` 兜底；
-2. 自己扩展镜像加 `wget`（`apk add --no-cache wget`），再用 `wget -qO- http://127.0.0.1:8080/api/healthz`；
-3. 在**宿主机**上用 `curl -fsS http://127.0.0.1:8080/api/healthz` 做外部探活（`/api/healthz` 不需要登录，最适合探活）。
+2. 自己扩展镜像加 `wget`（`apk add --no-cache wget`），再用 `wget -qO- http://127.0.0.1:18090/api/healthz`；
+3. 在**宿主机**上用 `curl -fsS http://127.0.0.1:18090/api/healthz` 做外部探活（`/api/healthz` 不需要登录，最适合探活）。
 
 ### 2.4 在容器里使用管理命令
 
@@ -239,7 +244,7 @@ sudo chmod 0750 /etc/homevault /var/lib/homevault
 
 # 5) 写配置（space_dir 必须是绝对路径，且必须是 homevault 可写的目录）
 sudo tee /etc/homevault/config.ini >/dev/null <<'EOF'
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:18090"
 space_dir = "/var/lib/homevault/HomeVaultSpace"
 tls_cert = ""
 tls_key = ""
@@ -333,7 +338,7 @@ drive.example.com {
 
     # Caddy 自动申请并续期 Let's Encrypt 证书，无需手写 TLS 配置。
     # gzip/zstd 会顺带处理静态资源；/api/ 的响应体很小，压缩不影响上传。
-    reverse_proxy 127.0.0.1:8080 {
+    reverse_proxy 127.0.0.1:18090 {
         # 大文件上传/下载可能持续很久，放宽超时（Caddy 默认也是长超时，这里显式写出）
         transport http {
             read_timeout 3600s
@@ -377,7 +382,7 @@ server {
     client_body_timeout  3600s;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:18090;
         proxy_http_version 1.1;
 
         proxy_set_header Host              $host;
@@ -401,7 +406,7 @@ server {
 
     # 不要缓存 API
     location /api/ {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:18090;
         proxy_http_version 1.1;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
@@ -430,7 +435,7 @@ server {
 
 ```bash
 # 1) 服务端监听的是 127.0.0.1（不直接对外）
-grep '^listen' /etc/homevault/config.ini      # listen = "127.0.0.1:8080"
+grep '^listen' /etc/homevault/config.ini      # listen = "127.0.0.1:18090"
 
 # 2) 管理页面打开"信任反向代理"（系统设置 → 信任反向代理 → 保存）
 #    否则审计日志里的 IP 是代理地址
@@ -439,7 +444,7 @@ grep '^listen' /etc/homevault/config.ini      # listen = "127.0.0.1:8080"
 curl -fsS https://drive.example.com/api/healthz
 
 # 4) 审计日志里的 IP 是真实客户端
-curl -fsS -b admin.txt 'http://127.0.0.1:8080/api/logs?limit=5'
+curl -fsS -b admin.txt 'http://127.0.0.1:18090/api/logs?limit=5'
 ```
 
 ---
@@ -505,7 +510,7 @@ Word / Excel / PPT / ODF / RTF 由服务端调用 LibreOffice 转成 PDF 后预�
 - [ ] `admin_password` 已改成强密码（或者首启后立刻通过界面改掉）；确认管理员不再是 `mustChangeCredentials` 状态
 - [ ] `space_dir` 是**绝对路径**，且落在持久化磁盘上（不是容器临时层、不是 tmpfs）
 - [ ] `space_dir` 所在磁盘的可用空间远大于预期数据总量（回收站会额外占一份）
-- [ ] 监听地址是 `127.0.0.1:8080`（有反代）或已配好 TLS（无反代），**不要**把裸 HTTP 暴露到公网
+- [ ] 监听地址是 `127.0.0.1:18090`（有反代）或已配好 TLS（无反代），**不要**把裸 HTTP 暴露到公网
 - [ ] 反代已设置 `proxy_request_buffering off`、`client_max_body_size 0`、超时 3600s，且没有缓存 `/api/`
 - [ ] 在管理页面打开了「信任反向代理」（如果确实在反代后面）
 - [ ] 运行期设置里确认：`defaultQuota`、`trashRetention`（默认 30 天）、`logRetention`（默认 90 天）、`maxUploadSize`、`sessionTTL`

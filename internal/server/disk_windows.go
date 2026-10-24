@@ -10,12 +10,25 @@ import (
 )
 
 // Disk 描述一个可选的存储位置。
+//
+// 字段与 unix 版保持一致，前端只写一次。
 type Disk struct {
-	Path    string `json:"path"`
-	Total   int64  `json:"total"`
-	Free    int64  `json:"free"`
-	FSType  string `json:"fsType,omitempty"`
-	Remarks string `json:"remarks,omitempty"`
+	Path     string   `json:"path"`
+	Device   string   `json:"device,omitempty"`
+	Total    int64    `json:"total"`
+	Free     int64    `json:"free"`
+	FSType   string   `json:"fsType,omitempty"`
+	Remarks  string   `json:"remarks,omitempty"`
+	AltPaths []string `json:"altPaths,omitempty"`
+	Writable bool     `json:"writable"`
+}
+
+// BlockDevice 在 Windows 上复用盘符列表，因此这里只需要类型占位。
+type BlockDevice struct {
+	Name   string   `json:"name"`
+	Size   int64    `json:"size"`
+	Model  string   `json:"model,omitempty"`
+	Mounts []string `json:"mounts,omitempty"`
 }
 
 var (
@@ -73,9 +86,28 @@ func ListDisks() ([]Disk, error) {
 		case 5:
 			remarks = "光驱"
 		}
-		out = append(out, Disk{Path: root, Total: total, Free: free, Remarks: remarks})
+		out = append(out, Disk{
+			Path: root, Device: root, Total: total, Free: free,
+			Remarks: remarks, Writable: true,
+		})
 	}
 	return out, nil
+}
+
+// ListBlockDevices 在 Windows 上不需要：盘符列表本身就是"一块盘一个条目"，
+// 不存在 unix 下同一设备被重复挂载的问题，因此返回空。
+func ListBlockDevices() ([]BlockDevice, error) { return nil, nil }
+
+// writableDir 判断当前用户能否在目录里创建文件。
+func writableDir(path string) bool {
+	f, err := os.CreateTemp(path, ".hv-probe-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 func driveType(root string) uintptr {

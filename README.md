@@ -9,7 +9,7 @@
 
 ```bash
 go build -o homevault . && ./homevault serve
-# 打开 http://127.0.0.1:8080/ ，用 admin / admin 登录（会强制要求改密码）
+# 打开 http://127.0.0.1:18090/ ，用 admin / admin 登录（会强制要求改密码）
 ```
 
 ---
@@ -394,7 +394,7 @@ curl -s http://127.0.0.1:18090/api/healthz
 第 2 步应返回：
 
 ```json
-{"status":"ok","time":"2026-10-23T13:04:42Z","version":"0.1.1"}
+{"status":"ok","time":"2026-10-23T13:04:42Z","version":"0.1.2"}
 ```
 
 **返回 `Connection refused` 时按顺序排查：**
@@ -409,11 +409,14 @@ docker compose --profile full ps
 # c. 日志里有报错吗？
 docker compose --profile full logs --tail=50
 
-# d. 容器内的 listen 是不是 8080？
+# d. 容器内的 listen 是不是 18090？
 docker exec homevault-full cat /data/config.ini
 ```
 
-> `d` 步是重点：容器内 `listen` **必须是 `0.0.0.0:8080`**。如果你把它改成了别的端口，Docker 的端口映射就对不上，浏览器报"拒绝连接"。详见[第 8 章](#8-配置说明)的"端口为什么有两个"。
+> `d` 步是重点：容器内 `listen` 应等于 compose 的容器端口（默认 `0.0.0.0:18090`）。
+> 入口脚本启动时会把 `config.ini` 对齐过去，日志里会出现
+> `[entrypoint] listen 已对齐到 0.0.0.0:18090`；如果看到的是
+> `未提供 HOMEVAULT_PORT`，说明这个容器不是由 compose 启动的。
 
 #### A8. 首次登录
 
@@ -478,7 +481,7 @@ sudo rm -rf data-full                       # 删数据（谨慎，无法恢复�
 
 ```bash
 # 换成实际架构：amd64 / arm64 / armv7
-wget https://github.com/MDDC0412/HomeVault/releases/download/v0.1.1/homevault-linux-amd64.tar.gz
+wget https://github.com/MDDC0412/HomeVault/releases/download/v0.1.2/homevault-linux-amd64.tar.gz
 tar -xzf homevault-linux-amd64.tar.gz
 sudo install -m 0755 homevault /usr/local/bin/homevault
 ```
@@ -534,7 +537,7 @@ sudo journalctl -u homevault -f        # 实时日志
 1. 下载 `homevault-windows-amd64.zip`，解压到**有写权限**的目录（如 `D:\HomeVault`，**不要放 `C:\Program Files`**）。
 2. 双击 `homevault.exe`（不带参数等价于 `homevault serve`）。
 3. 首次运行自动生成 `config.ini`，并在 `C:\HomeVaultSpace` 建好数据骨架。
-4. 浏览器打开 <http://127.0.0.1:8080/>，用 `admin` / `admin` 登录。
+4. 浏览器打开 <http://127.0.0.1:18090/>，用 `admin` / `admin` 登录。
 5. 首次登录强制改账号或密码。
 
 > 弹出防火墙提示时选"允许访问"。只本机用可选"专用网络"。
@@ -545,7 +548,7 @@ sudo journalctl -u homevault -f        # 实时日志
 
 ```powershell
 cd D:\HomeVault
-.\homevault.exe serve                          # 默认 0.0.0.0:8080
+.\homevault.exe serve                          # 默认 0.0.0.0:18090
 .\homevault.exe serve -config D:\HomeVault\config.ini
 .\homevault.exe serve -log-level debug         # 排查问题
 .\homevault.exe version
@@ -603,8 +606,8 @@ HomeVault **不需要配置文件就能启动**。配置文件只在需要改监
 ### 完整示例
 
 ```ini
-# HTTP(S) 监听地址。放在反向代理后面时建议改成 127.0.0.1:8080。
-listen = "0.0.0.0:8080"
+# HTTP(S) 监听地址。放在反向代理后面时建议改成 127.0.0.1:18090。
+listen = "0.0.0.0:18090"
 
 # 空间目录：用户文件、回收站、审计日志、上传分片、缓存与元数据都在其中。
 space_dir = "D:/HomeVaultSpace"
@@ -623,7 +626,7 @@ admin_password = "改成你自己的强密码"
 
 | 字段 | 类型 | 默认值 | 必填 | 说明 |
 | --- | --- | --- | --- | --- |
-| `listen` | string | `"0.0.0.0:8080"` | 否 | HTTP(S) 监听地址。反向代理后面建议 `"127.0.0.1:8080"` |
+| `listen` | string | `"0.0.0.0:18090"` | 否 | HTTP(S) 监听地址。反向代理后面建议 `"127.0.0.1:18090"` |
 | `space_dir` | string | 系统默认 | 否 | 空间目录绝对路径。**必须是绝对路径**，否则启动失败；相对路径按配置文件所在目录解析 |
 | `tls_cert` | string | `""` | 否 | TLS 证书路径（PEM）。必须与 `tls_key` 同时非空才启用内置 HTTPS |
 | `tls_key` | string | `""` | 否 | TLS 私钥路径（PEM） |
@@ -648,22 +651,25 @@ admin_password = "改成你自己的强密码"
 
 ### 端口为什么有两个（Docker 场景必读）
 
-这是最容易踩的坑。Docker 部署时涉及两个端口，**它们不是同一个**：
+Docker 部署时有两个端口：**宿主端口可改，容器内端口固定**。
 
 ```
-浏览器  ──→  宿主机:18090  ──[Docker 端口映射]──→  容器内:8080
+浏览器  ──→  宿主机:18090  ──[Docker 端口映射]──→  容器内:18090
               ↑                                      ↑
-      改 .env 里的 HOST_PORT              改 config.ini 里的 listen
+      改 .env 里的 HOST_PORT               compose 固定 18090，并通过
+                                           HOMEVAULT_PORT 传给程序
 ```
+
+容器启动时，入口脚本会把 `config.ini` 的 `listen` **自动对齐**到 `HOMEVAULT_PORT`，
+所以"映射与监听对不上"这件事在新版本里不会再发生，**你也不需要手改 `config.ini`**。
 
 | 部署方式 | 改哪里 | 举例 |
 | --- | --- | --- |
-| **Docker**（几乎总是这种） | 改 `.env` 的 `HOST_PORT`，**不要动 `config.ini`** | `HOST_PORT=18090` → 访问 `http://IP:18090` |
-| 二进制 / systemd / Windows | 改 `config.ini` 的 `listen` | `listen = "0.0.0.0:18090"` |
+| **Docker**（几乎总是这种） | 只改 `.env` 的 `HOST_PORT` | `HOST_PORT=9000` → 访问 `http://IP:9000` |
+| 二进制 / systemd / Windows | 改 `config.ini` 的 `listen`，或直接在管理页面「监听端口与 HTTPS」里改 | `listen = "0.0.0.0:18090"` |
 
-**典型错误**：把 `config.ini` 的 `listen` 改成 `0.0.0.0:18090`，但 compose 里仍是 `18090:8080`。容器内部在 18090 监听，Docker 却把宿主机 18090 转发到容器 8080——那里没人监听，浏览器就报 **"拒绝连接"**。
-
-> Docker 场景请保持 `config.ini` 的 `listen = "0.0.0.0:8080"` 不变。容器启动时会自动生成正确配置（见 `deploy/docker-entrypoint.sh`），不需要你手动写。
+> 管理页面改的是 `config.ini`，对 Docker 部署只影响**容器内部**：容器对外端口永远由
+> compose 的 `ports` 决定。想换对外端口，改 `.env` 再 `docker compose up -d`。
 
 ### 空间目录内部结构
 
@@ -685,7 +691,7 @@ admin_password = "改成你自己的强密码"
 
 ### 管理页面登录
 
-1. 浏览器打开 `http://<你的地址>:8080/admin`。
+1. 浏览器打开 `http://<你的地址>:18090/admin`。
 2. 用 `config.ini` 里的 `admin_user` / `admin_password` 登录（默认 `admin` / `admin`）。
 3. 首次登录会强制要求改账号或密码，**改完才能进管理页面**。
 4. 登录后左侧是六个页面：概览、用户管理、用户文件、审计日志、存储与设置、关于与帮助。
@@ -694,7 +700,7 @@ admin_password = "改成你自己的强密码"
 
 ### 用户端登录
 
-普通用户访问 `http://<你的地址>:8080/`，用管理员分配的账号密码登录，看到的是自己的空间。
+普通用户访问 `http://<你的地址>:18090/`，用管理员分配的账号密码登录，看到的是自己的空间。
 
 ### 创建新用户
 
@@ -713,7 +719,7 @@ admin_password = "改成你自己的强密码"
 
 | 项目 | 值 |
 | --- | --- |
-| Base URL | `http://<你的地址>:8080` |
+| Base URL | `http://<你的地址>:18090` |
 | 管理端页面 | `/admin` |
 | 用户端页面 | `/` |
 | 鉴权方式 1 | **Cookie**：登录后浏览器自动携带 `Cookie: homevault_session=<token>` |
@@ -723,7 +729,7 @@ admin_password = "改成你自己的强密码"
 ### 登录并取得 token
 
 ```bash
-curl -i -X POST http://127.0.0.1:8080/api/auth/login \
+curl -i -X POST http://127.0.0.1:18090/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"alice","password":"你的密码"}'
 ```
@@ -732,7 +738,7 @@ curl -i -X POST http://127.0.0.1:8080/api/auth/login \
 
 ```bash
 TOKEN='YWxpY2UK...'   # 上一步 Set-Cookie 里 homevault_session 的值
-curl "http://127.0.0.1:8080/api/auth/me" -H "Authorization: Bearer $TOKEN"
+curl "http://127.0.0.1:18090/api/auth/me" -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 上传文件
@@ -740,7 +746,7 @@ curl "http://127.0.0.1:8080/api/auth/me" -H "Authorization: Bearer $TOKEN"
 小文件走 multipart（**注意：目标目录是 query 参数 `path`，不是请求体字段**）：
 
 ```bash
-curl -X POST "http://127.0.0.1:8080/api/fs/upload?path=Documents" \
+curl -X POST "http://127.0.0.1:18090/api/fs/upload?path=Documents" \
   -H "Cookie: homevault_session=<你的 token>" \
   -F "file=@./report.pdf"
 ```
@@ -751,18 +757,18 @@ curl -X POST "http://127.0.0.1:8080/api/fs/upload?path=Documents" \
 
 ```bash
 # 列目录
-curl "http://127.0.0.1:8080/api/fs/list?path=" \
+curl "http://127.0.0.1:18090/api/fs/list?path=" \
   -H "Cookie: homevault_session=<你的 token>"
 
 # 下载
-curl -OJ "http://127.0.0.1:8080/api/fs/download?path=Documents/report.pdf" \
+curl -OJ "http://127.0.0.1:18090/api/fs/download?path=Documents/report.pdf" \
   -H "Cookie: homevault_session=<你的 token>"
 ```
 
 ### 搜索
 
 ```bash
-curl "http://127.0.0.1:8080/api/search?q=report&limit=20" \
+curl "http://127.0.0.1:18090/api/search?q=report&limit=20" \
   -H "Cookie: homevault_session=<你的 token>"
 ```
 
@@ -780,10 +786,53 @@ HomeVault 提供标准 HTTP + JSON 接口和浏览器页面，**不提供 WebDAV
 
 ### 监听地址与端口
 
-- 默认 `0.0.0.0:8080`，即监听所有网卡的 8080 端口。
-- 只在本机反代后面跑时，应改成 `127.0.0.1:8080`，避免直接暴露到公网。
-- 改端口改 `config.ini` 的 `listen` 后**需要重启**。
-- **Docker 场景例外**：容器内固定监听 8080，对外端口由 `.env` 的 `HOST_PORT` 决定，不要把 `listen` 改成对外端口。详见[第 8 章](#端口为什么有两个docker-场景必读)。
+- 默认 `0.0.0.0:18090`（刻意避开 8080/8081 这类最容易被别的程序占住的端口）。
+- 只在本机反代后面跑时，应改成 `127.0.0.1:18090`，避免直接暴露到公网。
+- 改端口有两个入口，都需要**重启**才生效：
+  - 管理页面「存储与设置 → 监听端口与 HTTPS」
+  - 直接编辑 `config.ini` 的 `listen`
+- **Docker 场景**：容器内固定监听 18090，对外端口由 `.env` 的 `HOST_PORT` 决定。
+  入口脚本会用 `HOMEVAULT_PORT` 把 `config.ini` 的 `listen` 自动对齐过去，
+  所以不需要、也不应该手改 `config.ini`。详见[第 8 章](#端口为什么有两个docker-场景必读)。
+
+### 用第二块磁盘 / 换盘
+
+容器里的进程是普通用户（uid 10001），**没有权限挂载磁盘**——也不该给。所以流程固定为三段：
+宿主机挂载 → compose 挂进容器 → 管理页面选目录。
+
+```bash
+# 1) 看清楚这台机器有几块盘、分别挂在哪
+lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT,MODEL
+
+# 2) 数据盘挂到某个目录（示例），并写进 /etc/fstab 保证重启后还在
+sudo mkdir -p /mnt/data
+sudo mount /dev/sda1 /mnt/data
+echo '/dev/sda1 /mnt/data ext4 defaults 0 2' | sudo tee -a /etc/fstab
+
+# 3) 让容器用户能写（UID 要与 compose 的 APP_UID 一致，默认 10001）
+sudo mkdir -p /mnt/data/HomeVaultSpace
+sudo chown -R 10001:10001 /mnt/data/HomeVaultSpace
+```
+
+```yaml
+# 4) deploy/docker-compose.yml 的 volumes 里加一行，然后重启
+volumes:
+  - ./data-full:/data
+  - /mnt/data:/data2
+```
+
+```bash
+docker compose --profile full up -d
+```
+
+5. 管理页面「存储与设置 → 浏览本机目录」进入 `/data2`，选中（或新建）`HomeVaultSpace` 保存，
+   提示重启后 `docker compose --profile full restart`。
+
+> **大数据量别用页面迁移**：页面上的"切换存储位置"是**同步复制**，几十 GB 会把请求拖到超时。
+> 这种情况用命令行：`homevault migrate-space --to /data2/HomeVaultSpace`，它跑在进程外、能看进度。
+
+「可选存储位置」只列出**已经挂进容器**的目录；宿主机上还有没挂进来的盘，会在下面的
+「物理磁盘」里显示为"未挂进容器"，照着上面的第 2～4 步挂进来之后它才会出现在可选列表里。
 
 ### 后台运行
 
@@ -826,8 +875,9 @@ nohup ./homevault serve > homevault.log 2>&1 &
 
 | 情况 | 行为 |
 | --- | --- |
-| `/data/config.ini` **不存在** | 自动生成一份容器场景正确的配置（`listen = 0.0.0.0:8080`、`space_dir = /data/HomeVaultSpace`） |
-| `/data/config.ini` **已存在** | **绝不覆盖**，你改过的端口、管理员账号全部保留 |
+| `/data/config.ini` **不存在** | 自动生成一份容器场景正确的配置（`listen = 0.0.0.0:18090`、`space_dir = /data/HomeVaultSpace`），并在数据卷为空时打印**大段告警**，提醒你确认挂载目录对不对 |
+| `/data/config.ini` **已存在** | **不覆盖内容**，你改过的 `space_dir`、管理员账号全部保留 |
+| 已存在、但 `listen` 与 `HOMEVAULT_PORT` 不一致 | **只改 `listen` 这一行**，并在日志里打印改了什么 |
 
 这样设计是因为宿主机 bind mount 会覆盖镜像里 `/data` 的内容——如果配置写死在镜像里，挂载后就被盖掉，容器会退回 `/root/HomeVaultSpace` 并且因为没有写权限而启动失败。
 
@@ -875,7 +925,7 @@ docker compose --profile full down      # 停止并删除容器（数据保留�
 ### 健康检查
 
 ```bash
-curl -f http://127.0.0.1:8080/api/healthz
+curl -f http://127.0.0.1:18090/api/healthz
 ```
 
 返回 2xx 即表示服务正常。可接入 systemd watchdog 或容器 healthcheck。
@@ -1067,7 +1117,7 @@ go vet ./...
 
 **症状**：找不到配置文件但服务却能启动。
 
-**说明**：这是正常的。**没有配置文件也能运行**，程序会使用全部默认值（`0.0.0.0:8080` + 系统默认空间目录）。
+**说明**：这是正常的。**没有配置文件也能运行**，程序会使用全部默认值（`0.0.0.0:18090` + 系统默认空间目录）。
 
 ### Docker 容器启动失败
 
@@ -1144,11 +1194,11 @@ curl -v http://<服务器IP>:18090/api/healthz
 
 ```bash
 # Linux / macOS
-sudo lsof -i :8080
-ss -tlnp | grep 8080
+sudo lsof -i :18090
+ss -tlnp | grep 18090
 
 # Windows
-netstat -ano | findstr :8080
+netstat -ano | findstr :18090
 ```
 
 **处理**：结束占用进程，或改 `config.ini` 的 `listen` 换一个端口。
@@ -1208,7 +1258,7 @@ netstat -ano | findstr :8080
 
 **排查顺序**：
 
-1. **先确认是不是端口写错了。** 浏览器里访问 `http://IP` 默认走 80 端口，而服务默认监听 8080（Docker 场景常映射到别的端口，如 18090）。用 `http://IP:端口` 访问。
+1. **先确认是不是端口写错了。** 浏览器里访问 `http://IP` 默认走 80 端口，而服务默认监听 18090（Docker 场景常映射到别的端口，如 18090）。用 `http://IP:端口` 访问。
 2. 换一个浏览器或无痕窗口，排除扩展拦截（广告拦截类插件会拦 iframe）。
 3. 确认前面没有额外的反向代理覆盖这两个响应头。Nginx 里如果配了 `add_header X-Frame-Options DENY;`，会与首页的 CSP 冲突，需要针对预览路径放开。
 
@@ -1267,7 +1317,7 @@ netstat -ano | findstr :8080
 
 ### 当前版本
 
-**`0.1.1`**
+**`0.1.2`**
 
 查看方式：
 
@@ -1276,6 +1326,44 @@ netstat -ano | findstr :8080
 ```
 
 管理页面「关于与帮助」也会显示当前版本与运行时信息。
+
+### 0.1.2 主要变更
+
+**数据安全：不会再"静默丢账号"**
+
+以前的加载逻辑把"`state.json` 存在但为空/损坏"当成首次安装，初始化一个只有 `admin` 的空库继续跑，下一次写入就把原来的用户和设置永久覆盖。现在：
+
+- `state.json` 存在但为空（0 字节）或解析失败 → **拒绝启动**，并在错误里直接给出还原命令
+- `state.json` 不见了、但 `state.json.bak` 还在 → **拒绝启动**（多半是挂错数据卷或误删，而不是真的首次安装）
+- 每次成功加载都会留一份 `state.json.bak` 还原点
+- 容器入口脚本发现数据卷为空、要新建空库时，打印**大段告警**，把"你可能挂错目录了"和排查命令摆在你面前
+
+**修复：建用户失败会留下幽灵账号**
+
+创建用户时先写库、再建存储目录，建目录失败只要返回 500 就结束——账号记录已经落盘，接口却说失败，审计里也查不到。现在失败会回滚账号并写一条 `user_create / denied` 审计。
+
+**默认端口改为 18090，且不会再"拒绝连接"**
+
+- 默认监听从 `0.0.0.0:8080` 改为 `0.0.0.0:18090`（8080/8081 太容易被别的程序占住）
+- Docker 场景由 compose 的 `HOMEVAULT_PORT` 决定容器内端口，入口脚本启动时把 `config.ini` 的 `listen` **自动对齐**过去。映射与监听对不上导致"拒绝连接"的老问题，从此在结构上不可能发生
+
+**端口与 HTTPS 可以在管理页面改**
+
+「存储与设置 → 监听端口与 HTTPS」可以改监听地址、TLS 证书与私钥，保存时写回 `config.ini`，界面标注重启后生效。不用再 SSH 上去编辑文件。
+
+**磁盘列表按设备去重**
+
+之前 `/proc/mounts` 里每个挂载点都会被当成一个磁盘，同一块盘显示成好几个，连 `-v /etc/hosts:/etc/hosts` 这种**文件**挂载都被列为可选位置。现在：
+
+- 按设备 ID 去重，一块盘只出现一次，并列出同盘的其他挂载点
+- 新增「物理磁盘」总览：型号、容量、是否已挂进容器（容器只能看到挂进来的目录）
+- 新增目录浏览器：选盘 → 逐级进目录 → 选定，默认建议 `<挂载点>/HomeVaultSpace`
+
+**设置保存失败不再一闪而过**
+
+- 保存失败的提示改为表单内**常驻**错误条
+- "默认配额 > 空间总容量"在前端就拦截并说明原因，不再只靠服务端 400
+- 待生效项（存储位置 / 监听地址 / HTTPS）统一在顶部列出
 
 ### 0.1.1 主要变更
 

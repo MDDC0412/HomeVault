@@ -28,7 +28,7 @@ import (
 )
 
 // Version 由 main 注入。
-var Version = "0.1.1"
+var Version = "0.1.2"
 
 const sessionCookie = "homevault_session"
 
@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 
 		{"GET", "/api/system", "", false, s.handleSystem},
 		{"GET", "/api/system/disks", state.PermUsersManage, false, s.handleDisks},
+		{"GET", "/api/system/browse", state.PermUsersManage, false, s.handleBrowseDirs},
 		{"GET", "/api/stats", state.PermUsersManage, false, s.handleStats},
 
 		{"GET", "/api/search", state.PermRead, false, s.handleSearch},
@@ -452,7 +453,8 @@ func adminOnlyPath(p string) bool {
 	switch {
 	case strings.HasPrefix(p, "/api/users"), strings.HasPrefix(p, "/api/settings"):
 		return true
-	case p == "/api/system/disks":
+	case strings.HasPrefix(p, "/api/system/"):
+		// /api/system/disks、/api/system/browse 都是管理端能力。
 		return true
 	case strings.HasPrefix(p, "/api/logs/purge"):
 		// 清除日志只有管理员能做（普通账号即使有 logs_view 也不行）。

@@ -211,7 +211,7 @@ try {
         Write-Host '  next steps:' -ForegroundColor Cyan
         Write-Host '    1) smoke test : .\dist\homevault-windows-amd64.exe serve'
         Write-Host '    2) deployment : docs\DEPLOY.md'
-        Write-Host '    3) first login: http://127.0.0.1:8080/admin/   (admin / admin, must be changed)'
+        Write-Host '    3) first login: http://127.0.0.1:18090/admin/   (admin / admin, must be changed)'
     }
     Write-Host ''
 }

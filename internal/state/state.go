@@ -7,6 +7,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -250,7 +251,16 @@ var ErrNotFound = errors.New("记录不存在")
 // ErrExists 表示记录已存在。
 var ErrExists = errors.New("记录已存在")
 
+// BackupPath 返回与元数据文件配套的还原点路径。
+func BackupPath(path string) string { return path + ".bak" }
+
 // Open 打开（或初始化）元数据文件。
+//
+// 关键约定：**只有文件不存在时才当作首次运行**。文件存在但为空、或解析失败，
+// 一律报错退出，绝不静默降级成空库——那会把用户、配额、回收站索引一次性覆盖掉，
+// 在容器里看起来就是"账号和设置全回到默认值"，且事后无法恢复。
+//
+// 每次成功加载后会把原始内容留存一份到 state.json.bak，作为下一次的还原点。
 func Open(path string) (*Store, error) {
 	s := &Store{
 		path: path,
@@ -263,6 +273,15 @@ func Open(path string) (*Store, error) {
 	}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		// 还原点还在、主文件却没了：多半是挂错数据卷或误删，而不是真的首次运行。
+		// 直接初始化会把还原点也变成孤儿，所以在这里停下让用户决定。
+		if bak, berr := os.ReadFile(BackupPath(path)); berr == nil && len(bytes.TrimSpace(bak)) > 0 {
+			return nil, fmt.Errorf(
+				"%s 不存在，但发现还原点 %s。为避免误把已有数据当成全新安装，已拒绝启动。\n"+
+					"  要恢复：cp %s %s 后重启。\n"+
+					"  要确认从头开始：同时删除这两个文件后重启",
+				path, BackupPath(path), BackupPath(path), path)
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return nil, err
 		}
@@ -271,11 +290,23 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &s.data); err != nil {
-			return nil, fmt.Errorf("解析 %s 失败: %w", path, err)
-		}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, fmt.Errorf(
+			"%s 存在但内容为空（0 字节）。为避免把空库写回去、覆盖掉原有账号与设置，已拒绝启动。\n"+
+				"  若同目录有 %s，先停掉服务，再执行：cp %s %s，然后重启。\n"+
+				"  确认要放弃全部旧数据、从零开始，请手动删除该文件后重启",
+			path, BackupPath(path), BackupPath(path), path)
 	}
+	if err := json.Unmarshal(raw, &s.data); err != nil {
+		return nil, fmt.Errorf(
+			"解析 %s 失败: %w\n"+
+				"  文件可能被截断或手工改坏。可先停掉服务，再执行：cp %s %s 后重启。\n"+
+				"  确认要放弃全部旧数据、从零开始，请手动删除该文件后重启",
+			path, err, BackupPath(path), path)
+	}
+	// 加载成功即留一份还原点：下次写坏或误清空时，这是唯一能救回来的东西。
+	// 写失败不影响启动（例如目录只读），因此忽略错误。
+	_ = os.WriteFile(BackupPath(path), raw, 0o600)
 	if s.data.Users == nil {
 		s.data.Users = map[string]*User{}
 	}

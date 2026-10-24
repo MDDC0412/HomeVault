@@ -1233,7 +1233,7 @@ function exportLogs() {  const link = el('a', {
 
 /* ===== 7. 存储与设置 =================================================== */
 
-const settingsState = { settings: null, effective: null, restartRequired: [], disks: [] };
+const settingsState = { settings: null, effective: null, restartRequired: [], disks: [], devices: [] };
 
 async function renderSettings() {
   const view = el('section', { class: 'ld-view', 'aria-label': '存储与设置' });
@@ -1260,6 +1260,7 @@ async function loadSettings() {
     settingsState.effective = data.effective || {};
     settingsState.restartRequired = data.restartRequired || [];
     settingsState.disks = diskData.disks || [];
+    settingsState.devices = diskData.devices || [];
     settingsState.currentSpaceDir = diskData.currentSpaceDir || data.effective?.spaceDir || '';
     settingsState.defaultSpaceDir = diskData.defaultSpaceDir || '';
     settingsState.stats = stats;
@@ -1277,37 +1278,134 @@ function renderSettingsForm() {
   const eff = settingsState.effective;
   clearNode(box);
 
-  const restartBanner = settingsState.restartRequired.includes('spaceDir')
-    ? noteRow('warn', '存储位置已写入配置文件，需要重启 homevault 服务后才会真正切换。')
+  const restartLabels = { spaceDir: '存储位置', listen: '监听地址', tls: 'HTTPS 证书' };
+  const pendingRestart = (settingsState.restartRequired || []).map((k) => restartLabels[k] || k);
+  const restartBanner = pendingRestart.length
+    ? noteRow('warn', `以下改动已写入配置文件，需要重启服务后才会真正生效：${pendingRestart.join('、')}`)
     : null;
 
   /* --- 存储位置 --- */
   const spaceDir = el('input', { class: 'ld-input', type: 'text', value: eff.spaceDir || s.spaceDir || '', 'aria-label': '存储位置' });
   const diskBox = el('div', { class: 'ld-view__stack' });
+  const browserBox = el('div', { class: 'ld-view__stack' });
+
+  /** 把磁盘路径填进输入框；顺带给出"默认子目录"的建议值。 */
+  const useDisk = (disk, withDefaultSub) => {
+    const base = String(disk.path || '').replace(/[\\/]+$/, '');
+    const target = withDefaultSub ? `${base}/HomeVaultSpace` : base;
+    spaceDir.value = target;
+    toastInfo(`已填入 ${target}，确认后点保存`);
+    if (withDefaultSub) openBrowser(target);
+  };
+
+  const openBrowser = async (startPath) => {
+    clearNode(browserBox);
+    browserBox.appendChild(el('div', { class: 'ld-card' }, el('div', { class: 'ld-card__body' },
+      el('div', { class: 'ld-view__sub', text: '正在读取目录…' }))));
+    await loadBrowser(startPath || spaceDir.value.trim() || settingsState.currentSpaceDir || '');
+  };
+
+  const loadBrowser = async (target) => {
+    let data;
+    try {
+      data = await apiGet(`/api/system/browse?path=${encodeURIComponent(target)}`);
+    } catch (err) {
+      clearNode(browserBox);
+      browserBox.appendChild(el('div', { class: 'ld-card' }, el('div', { class: 'ld-card__body' },
+        noteRow('danger', `读不到这个目录：${(err && err.message) || target}`))));
+      return;
+    }
+    clearNode(browserBox);
+    const rows = el('div', { class: 'ld-view__stack' });
+    if (!data.dirs || !data.dirs.length) {
+      rows.appendChild(noteRow('info', '这个目录下没有子目录'));
+    } else {
+      for (const d of data.dirs) {
+        rows.appendChild(el('div', { class: 'ld-list__item' },
+          el('div', {}, el('div', { class: 'ld-mono', text: `${d.name}/` })),
+          el('ld-button', {
+            label: '进入', icon: 'chevron-right', variant: 'ghost', size: 'sm',
+            onClick: () => loadBrowser(d.path),
+          })));
+      }
+    }
+    const actions = el('div', { class: 'ld-view__actions' },
+      data.parent ? el('ld-button', {
+        label: '上一级', icon: 'chevron-left', variant: 'ghost',
+        onClick: () => loadBrowser(data.parent),
+      }) : null,
+      el('ld-button', {
+        label: '选择此目录', icon: 'check', variant: 'primary',
+        onClick: () => {
+          spaceDir.value = data.path;
+          toastSuccess(`已选择 ${data.path}，别忘了点保存`);
+        },
+      }));
+    browserBox.appendChild(el('details', { class: 'ld-card', open: true },
+      el('summary', { class: 'ld-section-title', text: '浏览目录' }),
+      el('div', { class: 'ld-card__body' },
+        el('div', { class: 'ld-mono', text: data.path }),
+        el('div', {
+          class: 'ld-view__sub',
+          text: `共 ${fmtBytes(data.total || 0)}，可用 ${fmtBytes(data.free || 0)}`
+            + (data.writable ? '' : ' · 当前运行用户不可写，选它会导致保存失败')
+            + (data.hasState ? ' · 这里已经有一套 HomeVault 数据' : '')
+            + (data.current ? ' · 当前正在使用' : ''),
+        }),
+        actions, rows)));
+  };
+
   const renderDisks = () => {
     clearNode(diskBox);
-    if (!settingsState.disks.length) return;
-    const list = el('div', { class: 'ld-list' });
-    for (const disk of settingsState.disks) {
-      list.appendChild(el('div', { class: 'ld-list__item' },
-        el('div', {},
-          el('div', { class: 'ld-mono', text: disk.path }),
-          el('div', { class: 'ld-view__sub', text: `共 ${fmtBytes(disk.total || 0)}，可用 ${fmtBytes(disk.free || 0)}${disk.remarks ? ` · ${disk.remarks}` : ''}` })),
-        el('ld-button', {
-          label: '填入',
-          icon: 'check',
-          variant: 'ghost',
-          size: 'sm',
-          onClick: () => {
-            spaceDir.value = disk.path;
-            toastInfo(`已填入 ${disk.path}，请确认后再保存`);
-          },
-        })));
+    const disks = settingsState.disks || [];
+    const devices = settingsState.devices || [];
+
+    if (disks.length) {
+      const list = el('div', { class: 'ld-list' });
+      for (const disk of disks) {
+        const extras = [];
+        if (disk.device) extras.push(disk.device);
+        extras.push(`共 ${fmtBytes(disk.total || 0)}，可用 ${fmtBytes(disk.free || 0)}`);
+        if (disk.remarks) extras.push(disk.remarks);
+        if (disk.altPaths && disk.altPaths.length) extras.push(`同盘还有 ${disk.altPaths.join('、')}`);
+        const btn = (label, icon, variant, onClick) => el('ld-button', {
+          label, icon, variant, size: 'sm', onClick,
+        });
+        list.appendChild(el('div', { class: 'ld-list__item' },
+          el('div', {},
+            el('div', { class: 'ld-mono', text: disk.path }),
+            el('div', { class: 'ld-view__sub', text: extras.join(' · ') })),
+          el('div', { class: 'ld-view__actions' },
+            btn('浏览', 'folder', 'ghost', () => openBrowser(disk.path)),
+            btn('填入', 'check', 'ghost', () => useDisk(disk, true)))));
+      }
+      diskBox.appendChild(el('details', { class: 'ld-card', open: true },
+        el('summary', { class: 'ld-section-title', text: `可选存储位置（${disks.length} 个）` }),
+        el('div', { class: 'ld-card__body' }, list,
+          noteRow('info', '同一块物理盘只列一次（按设备去重）。选好后会自动把现有数据复制过去，然后提示重启——不需要命令行。'))));
+    } else {
+      diskBox.appendChild(noteRow('warn', '没有枚举出可用的存储位置'));
     }
-    diskBox.appendChild(el('details', { class: 'ld-card' },
-      el('summary', { class: 'ld-section-title', text: `本机磁盘（${settingsState.disks.length} 个）` }),
-      el('div', { class: 'ld-card__body' }, list,
-        noteRow('info', '保存新的存储位置时，服务端会自动把现有数据复制过去，然后提示重启——不需要再去命令行跑迁移命令。'))));
+
+    if (devices.length) {
+      const rows = el('div', { class: 'ld-list' });
+      for (const dev of devices) {
+        const mounted = (dev.mounts || []).length;
+        rows.appendChild(el('div', { class: 'ld-list__item' },
+          el('div', {},
+            el('div', { class: 'ld-mono', text: `/dev/${dev.name}` }),
+            el('div', {
+              class: 'ld-view__sub',
+              text: `${fmtBytes(dev.size || 0)}${dev.model ? ` · ${dev.model}` : ''} · `
+                + (mounted ? `已挂进容器：${dev.mounts.join('、')}` : '未挂进容器'),
+            }))));
+      }
+      diskBox.appendChild(el('details', { class: 'ld-card' },
+        el('summary', { class: 'ld-section-title', text: `物理磁盘（${devices.length} 块）` }),
+        el('div', { class: 'ld-card__body' }, rows,
+          noteRow('info', '这是宿主机的磁盘视角。容器只能使用被挂载进来的目录，'
+            + '没挂进来的盘在宿主机上挂好、并在 docker-compose.yml 的 volumes 里加一行之后才会出现在上面的列表里。'))));
+    }
   };
   renderDisks();
 
@@ -1318,9 +1416,10 @@ function renderSettingsForm() {
       hint: `当前生效：${eff.spaceDir || '—'} · 系统默认：${settingsState.defaultSpaceDir || '—'}`,
     }, spaceDir),
     el('div', { class: 'ld-view__actions' },
+      el('ld-button', { label: '浏览本机目录', icon: 'folder', variant: 'ghost', onClick: () => openBrowser() }),
       el('ld-button', { label: '显示本机磁盘', icon: 'disk', variant: 'ghost', onClick: () => { renderDisks(); toastInfo('已展开磁盘列表'); } })),
-    noteRow('warn', '改到新位置时，会先把文件、回收站、日志整体复制过去（文件多时需要等一会儿），成功后需要重启服务。'),
-    diskBox);
+    noteRow('warn', '改到新位置时，会先把文件、回收站、日志整体复制过去（文件多时需要等一会儿，几百 GB 建议用命令行 migrate-space），成功后需要重启服务。'),
+    diskBox, browserBox);
 
   /* --- 空间总容量 --- */
   const spaceQuota = quotaInput({ value: s.spaceQuota || 0, label: '空间总容量' });
@@ -1368,8 +1467,28 @@ function renderSettingsForm() {
     el('label', { class: 'ld-check' }, trustProxy, el('span', { text: '信任反向代理传来的 X-Forwarded-For（仅在确实部署在代理后开启）' })),
     el('label', { class: 'ld-check' }, accessLogDisabled, el('span', { text: '关闭 HTTP 访问日志（审计日志不受影响）' })));
 
+  /* --- 监听端口与 HTTPS（写回配置文件，重启生效） --- */
+  const listenInput = el('input', {
+    class: 'ld-input', type: 'text', value: s.listen || eff.listen || '', 'aria-label': '监听地址',
+  });
+  const tlsCertInput = el('input', {
+    class: 'ld-input', type: 'text', value: s.tlsCert || eff.tlsCert || '', 'aria-label': 'TLS 证书路径',
+  });
+  const tlsKeyInput = el('input', {
+    class: 'ld-input', type: 'text', value: s.tlsKey || eff.tlsKey || '', 'aria-label': 'TLS 私钥路径',
+  });
+  const serviceCard = cardSection('监听端口与 HTTPS（改后需重启）',
+    el('div', { class: 'ld-filters' },
+      el('ld-field', { label: '监听地址', hint: `当前生效：${eff.listen || '—'} · 格式 host:port，例如 0.0.0.0:18090` }, listenInput),
+      el('ld-field', { label: 'TLS 证书（可选）', hint: '与私钥同时填写才启用内置 HTTPS' }, tlsCertInput),
+      el('ld-field', { label: 'TLS 私钥（可选）', hint: '留空则由反向代理终结 TLS' }, tlsKeyInput)),
+    noteRow('warn', 'Docker 部署时，容器内端口必须与 docker-compose.yml 里 ports 的右侧一致；改完这里还要改 compose，否则浏览器会报「拒绝连接」。'),
+    noteRow('info', '这几项属于「改了就换进程形态」的引导配置，保存后写入 config.ini，需要重启进程（容器：docker compose restart）才生效。'));
+
+  const errorBox = el('div', { class: 'ld-view__stack' });
+
   const form = el('form', { class: 'ld-form', novalidate: true },
-    storageCard, spaceCard, defaultsCard, limitsCard, runtimeCard,
+    storageCard, spaceCard, defaultsCard, limitsCard, runtimeCard, serviceCard, errorBox,
     el('div', { class: 'ld-view__actions' },
       el('ld-button', { label: '重新读取', icon: 'refresh', variant: 'ghost', onClick: () => loadSettings() }),
       el('ld-button', { label: '保存设置', icon: 'check', variant: 'primary', type: 'submit' })));
@@ -1392,6 +1511,17 @@ function renderSettingsForm() {
         return;
       }
     }
+    // 先在前端拦一次：默认配额大于空间总容量时服务端必然 400，
+    // 以前这种情况只会弹一个很快就消失的提示，看起来像"改成功了但没生效"。
+    if (spaceBytes > 0 && quotaBytes > spaceBytes) {
+      clearNode(errorBox);
+      errorBox.appendChild(noteRow('danger',
+        `默认配额（${fmtBytes(quotaBytes)}）不能超过空间总容量（${fmtBytes(spaceBytes)}），请先调大总容量或调小默认配额`));
+      toastError('默认配额不能超过空间总容量，已拦截，设置未提交');
+      return;
+    }
+    clearNode(errorBox);
+
     const patch = {
       spaceQuota: spaceBytes,
       defaultQuota: quotaBytes,
@@ -1410,6 +1540,16 @@ function renderSettingsForm() {
     const wantDir = spaceDir.value.trim();
     if (wantDir && wantDir !== (eff.spaceDir || '')) patch.spaceDir = wantDir;
 
+    // 引导配置：只有真的改了才提交，避免无意义地重写 config.ini。
+    const wantListen = listenInput.value.trim();
+    if (wantListen && wantListen !== (eff.listen || '')) patch.listen = wantListen;
+    const wantCert = tlsCertInput.value.trim();
+    const wantKey = tlsKeyInput.value.trim();
+    if (wantCert !== (eff.tlsCert || '') || wantKey !== (eff.tlsKey || '')) {
+      patch.tlsCert = wantCert;
+      patch.tlsKey = wantKey;
+    }
+
     try {
       const done = await withAdminPassword(async (adminPassword) => api('/api/settings', {
         method: 'PATCH',
@@ -1426,13 +1566,24 @@ function renderSettingsForm() {
         return;
       }
       toastSuccess('设置已保存');
-      if ((done.restartRequired || []).includes('spaceDir')) {
+      const needRestart = done.restartRequired || [];
+      if (needRestart.includes('spaceDir')) {
         toastInfo('存储位置已写入配置文件，重启服务后生效');
+      }
+      if (needRestart.includes('listen')) {
+        toastInfo('监听地址已写入配置文件，重启服务后生效（容器：docker compose restart）');
+      }
+      if (needRestart.includes('tls')) {
+        toastInfo('TLS 设置已写入配置文件，重启服务后生效');
       }
       await loadSettings();
     } catch (err) {
+      // 除了 toast，还在表单里留一条常驻的错误——一闪而过的提示等于没有提示。
+      const message = (err && err.message) || '保存设置失败';
+      clearNode(errorBox);
+      errorBox.appendChild(noteRow('danger', `保存失败：${message}`));
       if (err && err.code === 'migration_required') {
-        toastError(err.message);
+        toastError(message);
       } else {
         toastApiError(err, '保存设置失败');
       }

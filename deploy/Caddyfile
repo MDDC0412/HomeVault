@@ -18,7 +18,7 @@ drive.example.com {
 	encode zstd gzip
 
 	# 自动申请证书、自动续期、自动跳转 HTTPS —— 都靠这一行。
-	reverse_proxy 127.0.0.1:8080 {
+	reverse_proxy 127.0.0.1:18090 {
 		# 大文件上传/下载可能持续几十分钟，放宽读写超时。
 		transport http {
 			read_timeout 3600s
@@ -62,6 +62,6 @@ drive.example.com {
 # 内网 / 无域名场景：用自签证书或纯 HTTP。
 # 注意纯 HTTP 下登录 Cookie 不带 Secure 标记，只适合完全可信的内网。
 # -----------------------------------------------------------------------------
-# :8080 {
-# 	reverse_proxy 127.0.0.1:8081
+# :18090 {
+# 	reverse_proxy 127.0.0.1:18091
 # }

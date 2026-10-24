@@ -1,7 +1,7 @@
 # HomeVault HTTP API 契约
 
 > 本文以 **Go 后端实际实现** 为准（`internal/server/*.go`、`internal/core/*.go`）。
-> 版本：`server.Version = "0.1.1"`（定义于 `internal/server/server.go`）。
+> 版本：`server.Version = "0.1.2"`（定义于 `internal/server/server.go`）。
 > 所有接口都在 `/api/` 下；任何未列出的 `/api/...` 路径返回 `404 not_found`。
 
 ---
@@ -147,7 +147,7 @@
 ```json
 {
   "status": "ok",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "time": "2026-02-14T10:00:00.123456Z"
 }
 ```
@@ -228,7 +228,7 @@
   "officeAvailable": true,
   "sessionTTL": "168h",
   "spaceDir": "C:\\HomeVaultSpace",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "permissionLabels": ["read","upload","modify","delete","trash_view","trash_manage","users_manage","logs_view"]
 }
 ```
@@ -619,7 +619,7 @@
 
 ```bash
 # 1) 登录，保存 Cookie
-curl -s -c cookies.txt -X POST http://127.0.0.1:8080/api/auth/login \
+curl -s -c cookies.txt -X POST http://127.0.0.1:18090/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"alice","password":"alice-pass-2026"}'
 
@@ -627,7 +627,7 @@ FILE=/tmp/big.bin          # 假设 20 MiB
 SIZE=$(stat -c %s "$FILE")
 
 # 2) 初始化会话（服务端返回 chunkSize=8388608，故 chunkCount=3）
-curl -s -b cookies.txt -X POST http://127.0.0.1:8080/api/upload/init \
+curl -s -b cookies.txt -X POST http://127.0.0.1:18090/api/upload/init \
   -H 'Content-Type: application/json' \
   -d "{\"dir\":\"videos\",\"name\":\"big.bin\",\"size\":$SIZE}"
 # => {"id":"u_6f1c...","chunkSize":8388608,"chunkCount":3,"received":[],...}
@@ -637,21 +637,21 @@ ID=u_6f1c2a9b3d4e5f6789ab
 dd if="$FILE" of=/tmp/c0 bs=8388608 skip=0 count=1 2>/dev/null
 curl -s -b cookies.txt -X PUT --data-binary @/tmp/c0 \
   -H 'Content-Type: application/octet-stream' \
-  "http://127.0.0.1:8080/api/upload/$ID/0"
+  "http://127.0.0.1:18090/api/upload/$ID/0"
 # => {"received":[0],...}
 
 # 4) 再上传第 1、2 个分片（第 2 个是最后一片，长度不足 8MiB）
 dd if="$FILE" of=/tmp/c1 bs=8388608 skip=1 count=1 2>/dev/null
-curl -s -b cookies.txt -X PUT --data-binary @/tmp/c1 "http://127.0.0.1:8080/api/upload/$ID/1"
+curl -s -b cookies.txt -X PUT --data-binary @/tmp/c1 "http://127.0.0.1:18090/api/upload/$ID/1"
 dd if="$FILE" of=/tmp/c2 bs=8388608 skip=2 count=1 2>/dev/null
-curl -s -b cookies.txt -X PUT --data-binary @/tmp/c2 "http://127.0.0.1:8080/api/upload/$ID/2"
+curl -s -b cookies.txt -X PUT --data-binary @/tmp/c2 "http://127.0.0.1:18090/api/upload/$ID/2"
 
 # 5) 查询进度（断线重连后先查这个，再补 missing 的分片）
-curl -s -b cookies.txt "http://127.0.0.1:8080/api/upload/$ID"
+curl -s -b cookies.txt "http://127.0.0.1:18090/api/upload/$ID"
 # => {"received":[0,1,2],"bytesReceived":20971520,...}
 
 # 6) 合并落盘
-curl -s -b cookies.txt -X POST "http://127.0.0.1:8080/api/upload/$ID/complete"
+curl -s -b cookies.txt -X POST "http://127.0.0.1:18090/api/upload/$ID/complete"
 # => {"name":"big.bin","path":"videos/big.bin","size":20971520}
 ```
 
@@ -965,7 +965,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 
 ## 8. 用户管理
 
-所有用户管理接口（`/api/users*`）与运行期设置接口（`/api/settings*`）、磁盘列表（`/api/system/disks`）
+所有用户管理接口（`/api/users*`）与运行期设置接口（`/api/settings*`）、磁盘列表与目录浏览（`/api/system/disks`、`/api/system/browse`）
 **只允许管理员账号**：非管理员一律 `403 forbidden`，即使他拥有 `users_manage` 权限位。
 管理员每次调用写操作都要二次密码（`adminPassword`），**没有任何免密时间窗**。
 
@@ -1105,6 +1105,9 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 {
   "settings": {
     "spaceDir": "",
+    "listen": "",
+    "tlsCert": "",
+    "tlsKey": "",
     "defaultQuota": 10737418240,
     "defaultRateLimitMbps": 0,
     "trashRetention": "720h",
@@ -1120,20 +1123,22 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
   "restartRequired": [],
   "effective": {
     "configFile": "C:\\homevault\\config.ini",
-    "listen": "0.0.0.0:8080",
+    "listen": "0.0.0.0:18090",
     "spaceDir": "C:\\HomeVaultSpace",
     "defaultSpaceDir": "C:\\HomeVaultSpace",
     "tlsEnabled": false,
+    "tlsCert": "",
+    "tlsKey": "",
     "officeAvailable": true,
-    "version": "0.1.1",
+    "version": "0.1.2",
     "permissionNames": ["read","upload","modify","delete","trash_view","trash_manage","users_manage","logs_view"]
   }
 }
 ```
 
 - `settings` 是持久化在 `<space_dir>/state.json` 里的运行期设置。
-- `settings.spaceDir` **为空表示沿用 config.ini / 系统默认**；非空表示"已被写入 config.ini 但尚未重启生效"的新位置。
-- `restartRequired` 在 `settings.spaceDir` 非空且与当前生效值不同时包含 `"spaceDir"`。
+- `settings.spaceDir` / `listen` / `tlsCert` / `tlsKey` **为空表示沿用 config.ini 的当前值**；非空表示"已被写入 config.ini 但尚未重启生效"的新值。
+- `restartRequired` 是上述待生效项的键名数组，可能包含 `"spaceDir"` / `"listen"` / `"tls"`。
 - `effective` 是**当前进程真正生效**的引导配置（来自 config.ini），只读。
 
 ### 9.2 `PATCH /api/settings`（仅管理员，每次都要二次密码）
@@ -1143,6 +1148,8 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 | 字段 | 类型 | 默认 | 作用 | 是否需要重启 |
 | --- | --- | --- | --- | --- |
 | `spaceDir` | string | `""` | 存储位置（绝对路径），写进 config.ini 并提示重启 | **是**（`restartRequired: ["spaceDir"]`） |
+| `listen` | string | `""` | 监听地址，格式 `host:port`（如 `0.0.0.0:18090`）；写进 config.ini | **是**（`restartRequired: ["listen"]`） |
+| `tlsCert` / `tlsKey` | string | `""` | TLS 证书与私钥的绝对路径；两项必须同时填写或同时留空，文件必须存在且可读 | **是**（`restartRequired: ["tls"]`） |
 | `spaceQuota` | 字节数或 `"5GiB"` | `5368709120`（5 GiB） | 整个空间目录的容量上限（所有用户 + 回收站 + 未提交分片）；`0` = 不限。所有账号配额之和不能超过它 | 否 |
 | `defaultQuota` | 字节数或 `"1GiB"` | `1073741824`（1 GiB） | 新建用户的默认配额；不能超过 `spaceQuota` | 否（只影响之后新建的用户） |
 | `defaultRateLimitMbps` | int | `0` | 新建用户的默认双向限速 Mbps；`0` = 不限 | 否 |
@@ -1186,7 +1193,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 
 ```json
 {
-  "version": "0.1.1",
+  "version": "0.1.2",
   "uptimeSeconds": 11532,
   "spaceDir": "/var/lib/homevault/HomeVaultSpace",
   "diskTotal": 107374182400,
@@ -1200,7 +1207,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 
 ```json
 {
-  "version": "0.1.1",
+  "version": "0.1.2",
   "uptimeSeconds": 11532,
   "spaceDir": "/var/lib/homevault/HomeVaultSpace",
   "diskTotal": 107374182400,
@@ -1226,17 +1233,46 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 ```json
 {
   "disks": [
-    { "path": "C:\\", "total": 107374182400, "free": 85899345920, "remarks": "本地磁盘" },
-    { "path": "D:\\", "total": 214748364800, "free": 200000000000, "remarks": "本地磁盘" }
+    { "path": "/data", "device": "/dev/sdb2", "total": 250000000000, "free": 200000000000,
+      "fsType": "ext4", "altPaths": ["/"], "writable": true }
   ],
-  "currentSpaceDir": "C:\\HomeVaultSpace",
-  "defaultSpaceDir": "C:\\HomeVaultSpace"
+  "devices": [
+    { "name": "sda", "size": 320000000000, "model": "WDC WD3200AAJS", "mounts": [] },
+    { "name": "sdb", "size": 256000000000, "model": "Maxsun 256GB SSD", "mounts": ["/data"] }
+  ],
+  "currentSpaceDir": "/data/HomeVaultSpace",
+  "defaultSpaceDir": "/data/HomeVaultSpace"
 }
 ```
 
-- Windows：枚举盘符，`remarks` 为 `可移动磁盘` / `本地磁盘` / `网络驱动器` / `光驱`（不带 `fsType`）。
-- Linux：读 `/proc/mounts`，只列出设备以 `/dev/` 开头的可写文件系统（排除 `proc` / `sysfs` / `tmpfs` / `overlay` / `squashfs` 等），带 `fsType`；一个都没有时回落到 `/`。
+- `disks` 是**可选的存储位置**，按设备 ID（`st_dev`）去重：同一块盘被挂载多次（bind mount）只出现一次，其余挂载点放进 `altPaths`。
+- 绑定挂载的**文件**（典型如 `-v /etc/hosts:/etc/hosts`）不会被当成磁盘；容器根（overlay）也不出现在 `disks` 里，避免把数据写进容器层。
+- `writable` 表示当前运行用户能否在该目录创建文件；`remarks` 给出"网络文件系统 / 当前用户不可写"等提示。
+- `devices` 是宿主机物理盘概览（读 `/proc/partitions`），`mounts` **只包含容器内可见的挂载点**：为空说明这块盘没挂进容器，需要先在宿主机挂载、再在 compose 的 `volumes` 里加一行。
+- Windows 下 `devices` 恒为 `[]`（盘符列表本身就是一块盘一个条目，不存在重复挂载问题）。
 - 磁盘枚举失败 → `500 internal_error`。
+
+### 9.5 `GET /api/system/browse?path=<绝对路径>`（仅管理员）
+
+用于管理页面"选哪个目录当存储位置"。响应 `200`：
+
+```json
+{
+  "path": "/data",
+  "parent": "/",
+  "dirs": [ { "name": "HomeVaultSpace", "path": "/data/HomeVaultSpace" } ],
+  "writable": true,
+  "total": 320000000000,
+  "free": 200000000000,
+  "hasState": false,
+  "current": false
+}
+```
+
+- **只返回子目录**，不返回文件名、大小或内容：这个接口的用途是挑一个落盘位置，不是文件管理器。
+- 隐藏目录（以 `.` 开头，如 `.git`、`.libreoffice`）会被跳过。
+- `hasState` 表示该目录里已经有 `state.json`（即已有一套 HomeVault 数据）；`current` 表示它就是当前生效的空间目录。
+- `path` 省略时默认浏览当前空间目录；**相对路径一律 `400 invalid_path`**，读不到的目录同样返回 `400`（不是 500，方便前端直接提示）。
 
 ---
 
@@ -1263,7 +1299,7 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 | `delete` | 移入回收站 |
 | `trash_view` | 查看回收站列表 |
 | `trash_manage` | 恢复、永久删除、清空回收站 |
-| `users_manage` | 管理端界面入口（**不再单独授予后端权限**：`/api/users*`、`/api/settings*`、`/api/system/disks` 只允许管理员账号） |
+| `users_manage` | 管理端界面入口（**不再单独授予后端权限**：`/api/users*`、`/api/settings*`、`/api/system/*` 只允许管理员账号） |
 | `logs_view` | 查看/导出审计日志 |
 
 - **管理员隐含拥有全部权限**（`Can()` 恒为真），不受 `permissions` 字段影响。
@@ -1293,15 +1329,15 @@ CSV 中的时间为**服务器本地时区** `2006-01-02 15:04:05`；JSON 中的
 
 ## 11. 用 curl 走完一遍
 
-以下示例假定服务运行在 `http://127.0.0.1:8080`，账号 `alice` / 密码 `alice-pass-2026`，且 `alice` 已通过强制改凭据阶段。
+以下示例假定服务运行在 `http://127.0.0.1:18090`，账号 `alice` / 密码 `alice-pass-2026`，且 `alice` 已通过强制改凭据阶段。
 
 ```bash
-BASE=http://127.0.0.1:8080
+BASE=http://127.0.0.1:18090
 J='Content-Type: application/json'
 
 # 0) 健康检查（不需要登录）
 curl -s $BASE/api/healthz
-# {"status":"ok","version":"0.1.1","time":"..."}
+# {"status":"ok","version":"0.1.2","time":"..."}
 
 # 1) 登录并保存 Cookie
 curl -s -c cookies.txt -X POST $BASE/api/auth/login -H "$J" \

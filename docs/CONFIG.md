@@ -21,10 +21,10 @@ HomeVault 的配置分成两层，这是刻意的设计：
 - 服务启动时会在控制台打印真实使用的配置文件绝对路径：
 
 ```
-  homevault 0.1.1 已启动
+  homevault 0.1.2 已启动
   ─────────────────────────────────────────────
-  用户端：  http://127.0.0.1:8080/
-  管理端：  http://127.0.0.1:8080/admin/
+  用户端：  http://127.0.0.1:18090/
+  管理端：  http://127.0.0.1:18090/admin/
   空间目录：/var/lib/homevault/HomeVaultSpace
   配置文件：/etc/homevault/config.ini
   Office 预览：不可用（未检测到 LibreOffice，将退回内置预览）
@@ -39,7 +39,7 @@ HomeVault 的配置分成两层，这是刻意的设计：
 | 注释 | 整行注释用 `#` 或 `;` |
 | 行内注释 | **值不加引号时**，`#` 与 `;` 之后的内容会被当注释截断 |
 | 引号 | 值用双引号包裹；含 `#`、`;`、空格、反斜杠或空值的路径**必须**加引号 |
-| 引号闭合 | `"` 开头但没闭合 → 启动失败；引号值后面允许跟 `#` / `;` 行尾注释（`listen = "0.0.0.0:8080" # 监听地址`），其它多余内容会报错 |
+| 引号闭合 | `"` 开头但没闭合 → 启动失败；引号值后面允许跟 `#` / `;` 行尾注释（`listen = "0.0.0.0:18090" # 监听地址`），其它多余内容会报错 |
 | 空值 | `listen` 与 `admin_user` 不允许为空；`tls_cert` / `tls_key` 允许为空；`space_dir` 允许为空（= 用系统默认） |
 | 未知键 | **启动直接失败**，消息形如 `第 12 行：未知配置项 "max_upload_size"（运行期参数请在管理页面配置）`。绝不静默忽略 |
 | 热加载 | 没有。改完必须重启进程（`systemctl restart homevault` 或 Ctrl+C 后重新运行） |
@@ -50,7 +50,7 @@ HomeVault 的配置分成两层，这是刻意的设计：
 
 | 键 | 类型 | 默认值 | 留空时 | 说明 |
 | --- | --- | --- | --- | --- |
-| `listen` | string | `"0.0.0.0:8080"` | 不允许 | HTTP(S) 监听地址。放在反向代理后面时建议改成 `"127.0.0.1:8080"` |
+| `listen` | string | `"0.0.0.0:18090"` | 不允许 | HTTP(S) 监听地址。放在反向代理后面时建议改成 `"127.0.0.1:18090"` |
 | `space_dir` | string | `""`（模板值） | 用系统默认 | 空间目录的绝对路径。**相对路径会相对于配置文件所在目录解析**；必须是绝对路径，否则启动失败 |
 | `tls_cert` | string | `""` | 不启用 HTTPS | TLS 证书路径（PEM）。**必须与 `tls_key` 同时非空**才启用内置 HTTPS，否则建议交给反向代理终结 TLS |
 | `tls_key` | string | `""` | 不启用 HTTPS | TLS 私钥路径（PEM） |
@@ -74,8 +74,8 @@ HomeVault 的配置分成两层，这是刻意的设计：
 # 这里只放"改了就换进程形态"的必须项。
 # 含 # 的值请用双引号包起来。改完需要重启进程。
 
-# HTTP 监听地址。放在反向代理后面时建议改成 127.0.0.1:8080。
-listen = "0.0.0.0:8080"
+# HTTP 监听地址。放在反向代理后面时建议改成 127.0.0.1:18090。
+listen = "0.0.0.0:18090"
 
 # 空间目录：用户文件、回收站、审计日志、上传分片、缓存与元数据都在其中。
 # 目录整体可搬迁：换盘时改这里 + 执行 homevault migrate-space。
@@ -96,7 +96,7 @@ admin_password = "admin"
 **A. 开发/内网直连（默认即用）**
 
 ```ini
-listen = "0.0.0.0:8080"
+listen = "0.0.0.0:18090"
 space_dir = "D:\\HomeVaultSpace"
 tls_cert = ""
 tls_key = ""
@@ -107,7 +107,7 @@ admin_password = "admin"
 **B. 多人各自独立的空间（每个账号一个根目录）**
 
 ```ini
-listen = "0.0.0.0:8080"
+listen = "0.0.0.0:18090"
 space_dir = "D:\\HomeVaultSpace"
 # 账号与它们的 root 都在管理页面创建；每个 root 必须唯一且不能互相嵌套。
 # 想让两个人看同一批文件：只给一个账号分配该 root，另一个账号用共享凭据登录。
@@ -118,7 +118,7 @@ admin_password = "改成你自己的强密码"
 **C. 反向代理后（Caddy / Nginx 终结 TLS）**
 
 ```ini
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:18090"
 space_dir = "/var/lib/homevault/HomeVaultSpace"
 tls_cert = ""
 tls_key = ""
@@ -144,7 +144,7 @@ admin_password = "改成你自己的强密码"
 **E. Windows 服务化（用 NSSM 之类的包装器）**
 
 ```ini
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:18090"
 space_dir = "E:\\HomeVaultSpace"
 tls_cert = ""
 tls_key = ""
@@ -242,6 +242,8 @@ admin_password = "改成你自己的强密码"
 | 设置项 | JSON 键 | 默认值 | 作用 | 重启 |
 | --- | --- | --- | --- | --- |
 | 存储位置 | `spaceDir` | `""` | 改到新位置时服务端会先把现有数据复制过去，然后提示重启 | **需要** |
+| 监听地址 | `listen` | `""` | 改端口**不需要**再编辑 `config.ini`：保存时写回配置文件，重启后生效 | **需要** |
+| TLS 证书 / 私钥 | `tlsCert` / `tlsKey` | `""` | 两项同时填写才启用内置 HTTPS；留空表示由反向代理终结 TLS | **需要** |
 | 空间总容量 | `spaceQuota` | `5368709120`（5 GiB） | 整个空间目录的上限（所有用户 + 回收站 + 未提交分片）；`0` = 不限。所有账号配额之和不能超过它 | 否 |
 | 默认配额 | `defaultQuota` | `1073741824`（1 GiB） | 新建用户的默认配额；不能超过 `spaceQuota` | 否 |
 | 默认限速 | `defaultRateLimitMbps` | `0` | 新建用户的默认双向限速（Mbps），`0` = 不限 | 否 |
@@ -303,7 +305,7 @@ admin_password = "改成你自己的强密码"
 ### 用 curl 改设置
 
 ```bash
-curl -s -b admin.txt -X PATCH http://127.0.0.1:8080/api/settings \
+curl -s -b admin.txt -X PATCH http://127.0.0.1:18090/api/settings \
   -H 'Content-Type: application/json' -d '{
   "defaultQuota": "10GiB",
   "defaultRateLimitMbps": 0,
@@ -369,7 +371,7 @@ sudo systemctl start homevault
 # 三处必须一致
 grep '^space_dir' /etc/homevault/config.ini        # 新路径
 ls -l /mnt/big/HomeVaultSpace/state.json           # 存在
-curl -s -b admin.txt http://127.0.0.1:8080/api/settings | grep -o '"spaceDir":"[^"]*"'
+curl -s -b admin.txt http://127.0.0.1:18090/api/settings | grep -o '"spaceDir":"[^"]*"'
 ```
 
 备份与升级流程见 [UPGRADE_BACKUP.md](UPGRADE_BACKUP.md)。

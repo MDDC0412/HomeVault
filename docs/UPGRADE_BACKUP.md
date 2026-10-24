@@ -6,6 +6,50 @@ HomeVault 的运维面很小：**一个二进制 + 一个配置文件 + 一个�
 
 ---
 
+## 0. 升级前 60 秒自检（Docker 部署必看）
+
+升级出问题，绝大多数不是"新版本有 bug"，而是**升级后容器读到的数据目录和原来不是同一个**：界面一打开，账号没了、配额回到默认，看起来像"数据被删了"，实际只是连到了一个新建的空库。
+
+升级前先跑这 4 条，把结果贴到一个 txt 里当"指纹"：
+
+```bash
+cd /www/HomeVault/deploy
+
+# 1) 当前容器到底挂了哪个宿主机目录
+docker inspect homevault-full --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+
+# 2) 库里有几个账号（这就是账号指纹）
+sudo grep -o '"username": *"[^"]*"' data-full/HomeVaultSpace/state.json
+
+# 3) 备份：state.json 只有几 KB，务必单独留一份
+sudo cp -a data-full/HomeVaultSpace/state.json /root/state.json.$(date +%F-%H%M).bak
+sudo tar czf /root/homevault-data-$(date +%F).tar.gz -C data-full HomeVaultSpace
+
+# 4) 记下版本
+docker exec homevault-full /homevault version
+```
+
+升级后再跑第 1、2、4 条，**逐项对照**：
+
+| 项 | 升级前（示例） | 升级后应当 |
+| --- | --- | --- |
+| 数据目录 | `/www/HomeVault/deploy/data-full` | 一字不差 |
+| 账号列表 | `admin` + 你的用户 | 一个不少 |
+| 版本 | `0.1.x` | 新版本号 |
+
+任何一项对不上，**立刻停手**：
+
+```bash
+docker compose --profile full down
+docker compose --profile full logs --tail=60
+```
+
+不要在那个空库上继续建用户、改设置——那只会让现场更难还原。入口脚本会明确打印它是"使用已存在的 config.ini"还是"新建了配置"，以及数据卷为空时的告警。
+
+> 0.1.2 起有三道护栏：`state.json` 为空/损坏 → **拒绝启动**；`state.json` 消失但 `.bak` 还在 → **拒绝启动**；每次成功加载都留一份 `state.json.bak`。目的就是让"挂错目录"在第一时间暴露，而不是等你几天后发现账号没了。
+
+---
+
 ## 1. 备份
 
 ### 1.1 需要备份什么
@@ -90,14 +134,14 @@ sudo lvcreate -L 10G -s -n homevault-snap /dev/vg0/homevault
 
 ```bash
 # 管理员 Cookie 存成 admin.txt 后
-curl -s -b admin.txt http://127.0.0.1:8080/api/settings > settings-$(date +%F).json
+curl -s -b admin.txt http://127.0.0.1:18090/api/settings > settings-$(date +%F).json
 
 # 账号清单（含配额、权限、用量）
-curl -s -b admin.txt http://127.0.0.1:8080/api/users > users-$(date +%F).json
+curl -s -b admin.txt http://127.0.0.1:18090/api/users > users-$(date +%F).json
 
 # 审计日志 CSV
 curl -s -b admin.txt -o logs-$(date +%F).csv \
-  'http://127.0.0.1:8080/api/logs?format=csv&limit=500'
+  'http://127.0.0.1:18090/api/logs?format=csv&limit=500'
 ```
 
 `config.ini` 与 `state.json` 里**没有任何明文密码**（只有 `pbkdf2-sha256$210000$…` 哈希），所以这些留档可以直接放保险柜，不必加密（但审计日志与账号清单涉及隐私，仍建议加密存储）。
@@ -141,7 +185,7 @@ ls -l /var/lib/homevault/HomeVaultSpace/state.json
 
 # 6) 启动并验证
 sudo systemctl start homevault
-curl -fsS http://127.0.0.1:8080/api/healthz
+curl -fsS http://127.0.0.1:18090/api/healthz
 ```
 
 如果第 5 步发现**没有** `state.json`，千万不要直接启动：服务会当成首次启动，重新创建 `admin/admin` 并强制改密，同时原来的账号配置在界面上"消失"。此时应该去备份里把 `state.json` 找回来。
@@ -197,7 +241,7 @@ sudo chown homevault:homevault /var/lib/homevault/HomeVaultSpace/files/alice/doc
 ```bash
 # 1) 记录当前版本与运行状态
 homevault version
-curl -fsS http://127.0.0.1:8080/api/healthz
+curl -fsS http://127.0.0.1:18090/api/healthz
 
 # 2) 备份（见 §1，至少是 config.ini + state.json + files/）
 sudo systemctl stop homevault
@@ -228,7 +272,7 @@ Docker 场景：
 ```bash
 docker build -f deploy/Dockerfile.lite -t homevault:lite .
 docker stop homevault && docker rm homevault
-docker run -d --name homevault -p 127.0.0.1:8080:8080 \
+docker run -d --name homevault -p 127.0.0.1:18090:18090 \
   -v "$PWD/data:/data" --restart unless-stopped homevault:lite
 ```
 
@@ -238,13 +282,13 @@ docker run -d --name homevault -p 127.0.0.1:8080:8080 \
 
 ```bash
 homevault version                                   # 版本号
-curl -fsS http://127.0.0.1:8080/api/healthz         # 版本 + 时间
+curl -fsS http://127.0.0.1:18090/api/healthz         # 版本 + 时间
 sudo journalctl -u homevault -n 50 --no-pager       # 有没有警告/错误
 
 # 用管理员 Cookie 抽查
-curl -s -b admin.txt http://127.0.0.1:8080/api/system
-curl -s -b admin.txt http://127.0.0.1:8080/api/settings | head -c 400
-curl -s -b admin.txt 'http://127.0.0.1:8080/api/logs?limit=5'
+curl -s -b admin.txt http://127.0.0.1:18090/api/system
+curl -s -b admin.txt http://127.0.0.1:18090/api/settings | head -c 400
+curl -s -b admin.txt 'http://127.0.0.1:18090/api/logs?limit=5'
 ```
 
 逐项确认：
@@ -262,7 +306,7 @@ curl -s -b admin.txt 'http://127.0.0.1:8080/api/logs?limit=5'
 sudo systemctl stop homevault
 
 # 换回旧二进制
-sudo install -m 0755 -o root -g root /usr/local/bin/homevault-0.1.1 /usr/local/bin/homevault
+sudo install -m 0755 -o root -g root /usr/local/bin/homevault-0.1.2 /usr/local/bin/homevault
 
 # 如果新版本改动过 state.json 的结构，把升级前的备份也放回去
 sudo rsync -aHAX --delete /mnt/backup/pre-upgrade-2026-02-14/HomeVaultSpace/ \
@@ -271,7 +315,7 @@ sudo rsync -aHAX --delete /mnt/backup/pre-upgrade-2026-02-14/HomeVaultSpace/ \
 sudo systemctl start homevault
 ```
 
-> **重要**：回滚二进制是安全的，但**回滚数据要慎重**。HomeVault 的元数据是单个 JSON 文件，新版本可能写入了旧版本不认识的字段。当前版本（0.1.1）是首个版本，还没有升级路径问题；未来版本升级时，本文档会补充"元数据兼容性"说明。**在不确定的情况下，先只回滚二进制**（旧版本通常能容忍 JSON 里的未知字段，因为 `state.json` 的解析不启用未知字段拒绝；但 `config.ini` 是严格拒绝未知键的，回滚时要确认新版本没往它里面写过新键）。
+> **重要**：回滚二进制是安全的，但**回滚数据要慎重**。HomeVault 的元数据是单个 JSON 文件，新版本可能写入了旧版本不认识的字段。当前版本（0.1.2）是首个版本，还没有升级路径问题；未来版本升级时，本文档会补充"元数据兼容性"说明。**在不确定的情况下，先只回滚二进制**（旧版本通常能容忍 JSON 里的未知字段，因为 `state.json` 的解析不启用未知字段拒绝；但 `config.ini` 是严格拒绝未知键的，回滚时要确认新版本没往它里面写过新键）。
 
 ### 3.5 关于配置文件与运行期设置的兼容性
 
@@ -333,10 +377,10 @@ grep '^space_dir' /etc/homevault/config.ini
 ls -l /mnt/big/HomeVaultSpace/state.json
 
 # 3) 服务健康
-curl -fsS http://127.0.0.1:8080/api/healthz
+curl -fsS http://127.0.0.1:18090/api/healthz
 
 # 4) 管理员能看到用户与用量（证明 state.json 与 files 都对得上）
-curl -s -b admin.txt http://127.0.0.1:8080/api/users
+curl -s -b admin.txt http://127.0.0.1:18090/api/users
 
 # 5) 随便下几个文件比对大小（证明 files/ 完整）
 # 6) 确认无误后再删旧目录（先重命名，观察几天再删更稳）

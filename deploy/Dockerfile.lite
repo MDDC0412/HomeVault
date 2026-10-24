@@ -2,7 +2,8 @@
 # homevault 精简版镜像（约 25–40 MB）
 #
 #   docker build -f deploy/Dockerfile.lite -t homevault:lite .
-#   docker run -d --name homevault -p 127.0.0.1:8080:8080 \
+#   docker run -d --name homevault -p 127.0.0.1:18090:18090 \
+#     -e HOMEVAULT_PORT=18090 \
 #     -v "$PWD/data:/data" --restart unless-stopped homevault:lite
 #
 # 特点：只有 homevault 本体。Word/Excel/PPT 这类文件不会做服务端转换，
@@ -71,7 +72,8 @@ RUN mkdir -p /data/HomeVaultSpace \
 VOLUME ["/data"]
 WORKDIR /data
 
-EXPOSE 8080
+# 容器内固定监听 18090（入口脚本保证 config.ini 与之对齐）。
+EXPOSE 18090
 
 COPY --from=build /out/homevault /homevault
 COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh

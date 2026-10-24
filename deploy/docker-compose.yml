@@ -25,14 +25,14 @@
 # 这样改配置不需要动 docker-compose.yml，git pull 时永远不会冲突。
 # 下面每个 ${VAR:-默认值} 的写法，都表示"没设就用默认值"。
 # -----------------------------------------------------------------------------
-# ⚠️ HOST_PORT 与 config.ini 的关系（最容易踩的坑）：
+# ⚠️ 端口只有一个地方要改：.env 里的 HOST_PORT。
 #
-#    容器内**始终**监听 8080，不要去改 config.ini 的 listen。
-#    对外端口由 HOST_PORT 决定，写在 ports 左边，形如 HOST_PORT:8080。
+#     ports 右侧（容器内）固定 18090，并通过 HOMEVAULT_PORT 告诉程序；
+#     入口脚本启动时会把 config.ini 的 listen 自动对齐到这个值。
+#     所以**不需要**再去编辑 config.ini —— 改了也会被覆盖回来。
 #
-#    正确：HOST_PORT=18090  →  访问 http://IP:18090
-#    错误：改 config.ini 的 listen 为 0.0.0.0:18090，但 ports 仍映射 8080
-#          →  端口映射与监听端口对不上，浏览器报"拒绝连接"
+#     正确：HOST_PORT=9000   →  访问 http://IP:9000
+#     错误：去改 config.ini 的 listen → 容器内监听与映射对不上，浏览器报"拒绝连接"
 # -----------------------------------------------------------------------------
 # =============================================================================
 
@@ -55,10 +55,10 @@ services:
     restart: unless-stopped
 
     ports:
-      # 左边是宿主机端口（可自定义），右边固定 8080（容器内监听端口）。
+      # 左边是宿主机端口（可自定义），右边是容器内监听端口（固定 18090）。
       # HOST_BIND=0.0.0.0   局域网其他设备可访问
       # HOST_BIND=127.0.0.1 只有本机能访问（前面挂反向代理时用）
-      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8080}:8080"
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-18090}:18090"
 
     volumes:
       # 唯一的持久化位置：config.ini、files/、trash/、audit/、uploads/、
@@ -66,9 +66,15 @@ services:
       # 宿主机目录属主必须是 APP_UID（默认 10001），否则容器写不进去：
       #   sudo chown -R 10001:10001 ./data
       - ./data:/data
+      # 想把用户文件放到第二块盘？把它也挂进来，然后在管理页面把
+      # 「存储位置」选成 /data2/HomeVaultSpace 即可（不需要改 config.ini）：
+      # - /mnt/data:/data2
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      # 容器内监听端口，必须与上面 ports 的**右侧**一致。入口脚本据此对齐
+      # config.ini 里的 listen，避免"映射对不上 → 拒绝连接"。
+      HOMEVAULT_PORT: "18090"
 
     # 不要开 read_only: true。
     # homevault 整个空间目录都在 /data 下持续写入，而且管理页面改"存储位置"
@@ -81,7 +87,7 @@ services:
     #
     # 若想用 compose 自带的 healthcheck，先让镜像里有 wget：
     # healthcheck:
-    #   test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/healthz"]
+    #   test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18090/api/healthz"]
     #   interval: 30s
     #   timeout: 5s
     #   retries: 3
@@ -111,19 +117,23 @@ services:
     restart: unless-stopped
 
     ports:
-      # 两个 profile 不要同时启用：端口不同虽能共存，但两套数据完全独立，
-      # 容易搞混哪个是哪个。
+      # 两个 profile 不要同时启用：端口相同会冲突，两套数据也完全独立。
       # ⚠️ 想让局域网其他设备访问，必须在 .env 里设 HOST_BIND=0.0.0.0
-      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8081}:8080"
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-18090}:18090"
 
     volumes:
       - ./data-full:/data
+      # 第二块盘：取消下面这行的注释，重启容器后它就会出现在
+      # 管理页面「存储位置 → 可选存储位置」列表里。
+      # - /mnt/data:/data2
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       # 镜像里已 ENV 设好，这里显式写出便于覆盖。
       # 换成自定义路径时记得把可执行文件也挂进容器。
       HOMEVAULT_SOFFICE: /usr/bin/soffice
+      # 容器内监听端口，必须与 ports 右侧一致（见文件头说明）。
+      HOMEVAULT_PORT: "18090"
 
     # 转换 Office 比较吃资源，按实际并发调整。
     # cpus: "2.0"

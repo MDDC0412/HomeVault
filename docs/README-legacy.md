@@ -4,7 +4,7 @@
 
 ```bash
 go build -o homevault . && ./homevault serve
-# 打开 http://127.0.0.1:8080/ ，用 admin / admin 登录（会强制要求改密码）
+# 打开 http://127.0.0.1:18090/ ，用 admin / admin 登录（会强制要求改密码）
 ```
 
 ---
@@ -130,12 +130,12 @@ node .\scripts\ui-selftest.mjs
 # 精简版（25–40 MB）：图片、PDF、文本、音视频预览
 docker build -f deploy/Dockerfile.lite -t homevault:lite .
 mkdir -p ./data
-docker run -d --name homevault -p 127.0.0.1:8080:8080 \
+docker run -d --name homevault -p 127.0.0.1:18090:18090 \
   -v "$PWD/data:/data" --restart unless-stopped homevault:lite
 
 # 完整版（700 MB–1 GB）：额外带 LibreOffice，支持 Office 文档转 PDF 预览
 docker build -f deploy/Dockerfile.full -t homevault:full .
-docker run -d --name homevault-full -p 127.0.0.1:8081:8080 \
+docker run -d --name homevault-full -p 127.0.0.1:18090:18090 \
   -v "$PWD/data-full:/data" --restart unless-stopped homevault:full
 ```
 
@@ -175,8 +175,8 @@ sudo journalctl -u homevault -f
 ```
   homevault 0.1.1 已启动
   ─────────────────────────────────────────────
-  用户端：  http://127.0.0.1:8080/
-  管理端：  http://127.0.0.1:8080/admin/
+  用户端：  http://127.0.0.1:18090/
+  管理端：  http://127.0.0.1:18090/admin/
   空间目录：/root/HomeVaultSpace
   配置文件：/var/lib/homevault/config.ini
   Office 预览：不可用（未检测到 LibreOffice，将退回内置预览）
@@ -291,7 +291,7 @@ homevault help
 
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
-| `listen` | `"0.0.0.0:8080"` | 监听地址；放在反向代理后面时建议改 `"127.0.0.1:8080"` |
+| `listen` | `"0.0.0.0:18090"` | 监听地址；放在反向代理后面时建议改 `"127.0.0.1:18090"` |
 | `space_dir` | `""`（用系统默认） | 空间目录的绝对路径。Windows 默认 `C:\HomeVaultSpace`，Linux 默认 `/root/HomeVaultSpace` |
 | `tls_cert` | `""` | TLS 证书路径；必须与 `tls_key` 同时设置才启用内置 HTTPS |
 | `tls_key` | `""` | TLS 私钥路径 |
@@ -407,7 +407,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
-Caddy 的 `reverse_proxy` 默认就是流式转发，不需要显式关缓冲；把 `reverse_proxy 127.0.0.1:8080` 交给它并依赖自动 HTTPS 即可。
+Caddy 的 `reverse_proxy` 默认就是流式转发，不需要显式关缓冲；把 `reverse_proxy 127.0.0.1:18090` 交给它并依赖自动 HTTPS 即可。
 
 **改完还要做一件事**：在管理端「系统设置」里打开「信任反向代理」。不打开的话，服务端不会采信 `X-Forwarded-For` / `X-Real-IP`，审计日志里记录的会是代理的 IP。完整示例见 `deploy/nginx.conf` 与 `deploy/Caddyfile`。
 
